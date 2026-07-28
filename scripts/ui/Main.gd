@@ -61,7 +61,11 @@ func _ready() -> void:
 	var cli: Array = []
 	cli.append_array(OS.get_cmdline_args())
 	cli.append_array(OS.get_cmdline_user_args())
-	if "--rules-test" in cli:
+	if "--click-test" in cli:
+		var clicker: Node = load("res://scripts/dev/ClickTest.gd").new()
+		clicker.name = "ClickTest"
+		add_child(clicker)
+	elif "--rules-test" in cli:
 		var tester: Node = load("res://scripts/dev/RulesTest.gd").new()
 		tester.name = "RulesTest"
 		add_child(tester)
@@ -380,4 +384,5 @@ func _on_menu() -> void:
 func _unhandled_input(event: InputEvent) -> void:
 	if event is InputEventKey and event.pressed and event.keycode == KEY_ESCAPE:
 		if card_picker.visible:
-			card_picker._on_cancel()
+			# Returns false for prompts that must be answered; the modal stays up.
+			card_picker.request_close()

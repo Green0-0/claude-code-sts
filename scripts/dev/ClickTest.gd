@@ -1,0 +1,214 @@
+extends Node
+
+## Drives the UI with synthesized mouse events, so the real input path gets
+## tested rather than the signal handlers being called directly.
+##   godot --headless -- --click-test
+
+var main: Node = null
+var passed: int = 0
+var failed: int = 0
+
+
+func _ready() -> void:
+	main = get_parent()
+	await get_tree().process_frame
+	await _run()
+	print("[click] %d passed, %d failed" % [passed, failed])
+	get_tree().quit(1 if failed > 0 else 0)
+
+
+func _check(label: String, got, want) -> void:
+	if got == want:
+		passed += 1
+		print("[click] ok   %s = %s" % [label, str(got)])
+	else:
+		failed += 1
+		print("[click] FAIL %s: got %s, want %s" % [label, str(got), str(want)])
+
+
+func _click_at(pos: Vector2) -> void:
+	var motion := InputEventMouseMotion.new()
+	motion.position = pos
+	motion.global_position = pos
+	Input.parse_input_event(motion)
+	await get_tree().process_frame
+	for pressed in [true, false]:
+		var click := InputEventMouseButton.new()
+		click.button_index = MOUSE_BUTTON_LEFT
+		click.pressed = pressed
+		click.position = pos
+		click.global_position = pos
+		Input.parse_input_event(click)
+		await get_tree().process_frame
+	await get_tree().process_frame
+
+
+func _click_control(c: Control) -> void:
+	await _click_at(c.get_global_rect().get_center())
+
+
+func _run() -> void:
+	# Start a Silent run so Survivor ("Gain 8 Block. Discard 1 card") is in the deck.
+	Run.start_run("silent", 99)
+	main._show(main.combat_screen)
+	main.combat_screen.begin(["jaw_worm"], "monster")
+	await get_tree().process_frame
+
+	var c: Combat = main.combat_screen.combat
+	var survivor := Card.create("survivor")
+	c.hand.append(survivor)
+	c.energy = 3
+	main.combat_screen._refresh_all()
+	await get_tree().process_frame
+
+	var hand_before: int = c.hand.size()
+	var discard_before: int = c.discard_pile.size()
+
+	# Play it through the engine; the discard prompt should open the picker.
+	c.play_card(survivor, 0)
+	await get_tree().process_frame
+	await get_tree().process_frame
+
+	var picker = main.card_picker
+	_check("picker opened", picker.visible, true)
+	_check("picker mode", picker._mode, "select")
+	_check("cards to choose from", picker._views.size(), hand_before - 1)
+	_check("needs one card", picker._needed, 1)
+	if not picker.visible or picker._views.size() == 0:
+		failed += 1
+		print("[click] cannot continue: picker did not open")
+		return
+
+	# What does the viewport think is under the first card?
+	var first: CardView = picker._views[0]
+	var point := first.get_global_rect().get_center()
+	var motion := InputEventMouseMotion.new()
+	motion.position = point
+	motion.global_position = point
+	Input.parse_input_event(motion)
+	await get_tree().process_frame
+	var hovered := get_viewport().gui_get_hovered_control()
+	print("[click] control under card: %s (%s)" % [
+			hovered.name if hovered != null else "<null>",
+			hovered.get_class() if hovered != null else "-"])
+	print("[click] card rect: %s  visible_in_tree: %s  mouse_filter: %d" % [
+			str(first.get_global_rect()), str(first.is_visible_in_tree()),
+			first.mouse_filter])
+
+	# Click the card.
+	await _click_control(first)
+	_check("card selected by click", picker._selection.size(), 1)
+	_check("confirm enabled", picker.confirm_button.disabled, false)
+
+	if picker._selection.is_empty():
+		print("[click] selection did not register — clicks are not reaching the card")
+		return
+
+	# Click Confirm.
+	await _click_control(picker.confirm_button)
+	await get_tree().process_frame
+	_check("picker hidden after confirm", picker.visible, false)
+	_check("choice cleared", c.pending_choice.is_empty(), true)
+	# Survivor itself plus the discarded card both land in the discard pile.
+	_check("two cards discarded", c.discard_pile.size(), discard_before + 2)
+	_check("hand shrank by two", c.hand.size(), hand_before - 2)
+	_check("block gained", c.player.block > 0, true)
+
+	await _test_escape_during_mandatory_choice(c)
+	await _test_picker_reopen(c)
+	await _test_event_prompt()
+
+
+## A mandatory prompt must not be dismissable, or the run soft-locks: the model
+## still holds pending_choice, which blocks every card and End Turn.
+func _test_escape_during_mandatory_choice(c: Combat) -> void:
+	print("[click] --- escape during a mandatory discard")
+	var survivor := Card.create("survivor")
+	c.hand.append(survivor)
+	c.energy = 3
+	c.play_card(survivor, 0)
+	await get_tree().process_frame
+	var picker = main.card_picker
+	_check("prompt open", picker.visible, true)
+	_check("prompt is mandatory", picker.cancel_button.visible, false)
+
+	var escape := InputEventKey.new()
+	escape.keycode = KEY_ESCAPE
+	escape.pressed = true
+	Input.parse_input_event(escape)
+	await get_tree().process_frame
+	await get_tree().process_frame
+
+	_check("still open after escape", picker.visible, true)
+	_check("choice still pending", c.pending_choice.is_empty(), false)
+
+	# And the game must still be playable once the choice is answered.
+	if picker.visible and picker._views.size() > 0:
+		await _click_control(picker._views[0])
+		await _click_control(picker.confirm_button)
+		await get_tree().process_frame
+	_check("recovered: no pending choice", c.pending_choice.is_empty(), true)
+	_check("recovered: can end turn", c.phase, "player")
+
+
+## Events have the same exposure: an option that asks you to pick a card hides the
+## options and only shows Continue afterwards, so a dismissable prompt would strand
+## the screen with nothing clickable.
+func _test_event_prompt() -> void:
+	print("[click] --- event card prompt")
+	var picker = main.card_picker
+	main._show(main.event_screen)
+	main.event_screen.show_event("living_wall")
+	await get_tree().process_frame
+
+	var options: Array = main.event_screen.options_box.get_children()
+	_check("event has options", options.size() > 0, true)
+	await _click_control(options[0] as Button)
+	_check("event prompt open", picker.visible, true)
+	_check("event prompt mandatory", picker.cancel_button.visible, false)
+
+	var escape := InputEventKey.new()
+	escape.keycode = KEY_ESCAPE
+	escape.pressed = true
+	Input.parse_input_event(escape)
+	await get_tree().process_frame
+	await get_tree().process_frame
+	_check("event prompt survives escape", picker.visible, true)
+
+	var deck_before: int = Run.deck.size()
+	if picker.visible and picker._views.size() > 0:
+		await _click_control(picker._views[0])
+		await get_tree().process_frame
+	_check("event prompt closed after picking", picker.visible, false)
+	_check("card removed from deck", Run.deck.size(), deck_before - 1)
+	_check("event can be left", main.event_screen.continue_button.visible, true)
+
+
+## Opening the picker twice must not leave the previous batch of cards in the grid.
+func _test_picker_reopen(c: Combat) -> void:
+	print("[click] --- reopening the picker")
+	var picker = main.card_picker
+	main._on_deck_view()
+	await get_tree().process_frame
+	var deck_views: int = picker._views.size()
+	_check("deck view populated", deck_views, Run.deck.size())
+	picker._on_cancel()
+	await get_tree().process_frame
+
+	var acrobatics := Card.create("acrobatics")
+	c.hand.append(acrobatics)
+	c.energy = 3
+	c.play_card(acrobatics, 0)
+	await get_tree().process_frame
+	_check("second prompt open", picker.visible, true)
+	_check("grid holds only the new cards", picker.grid.get_child_count(),
+			picker._views.size())
+	if picker._views.size() > 0:
+		var first_card: CardView = picker._views[0]
+		_check("first card is on screen",
+				picker.grid.get_global_rect().intersects(first_card.get_global_rect()), true)
+		await _click_control(first_card)
+		_check("reopened picker accepts clicks", picker._selection.size(), 1)
+		await _click_control(picker.confirm_button)
+		await get_tree().process_frame
+	_check("second choice resolved", c.pending_choice.is_empty(), true)

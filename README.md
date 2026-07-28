@@ -23,8 +23,14 @@ The main scene is `scenes/Main.tscn`.
 godot --headless -- --rules-test   # 69 assertions on the combat maths
 godot --headless -- --smoke        # one self-played run, prints a report
 godot --headless -- --smoke-deep   # 8 runs, immortal player, full 3-act coverage
+godot -- --click-test              # 30 assertions driven by synthesized clicks
 godot --headless -- --shots        # save one PNG per screen to user://shots
 ```
+
+`--click-test` needs a real display (the headless dummy display server does not do
+mouse picking, so GUI hit-testing always misses). It synthesizes actual mouse and
+key events instead of calling handlers, which is the only way to catch input-routing
+and modal-dismissal bugs.
 
 `--rules-test` pins down the numbers everything else rests on: damage scaling
 order (Strength → Weak → Vulnerable → Flight), block absorption and overflow, HP

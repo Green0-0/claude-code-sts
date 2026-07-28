@@ -1178,6 +1178,20 @@ func cancel_choice() -> void:
 	if bool(pending_choice.get("optional", false)):
 		pending_choice = {}
 		_run_queue()
+	else:
+		# The choice is compulsory, so it cannot be waived. Ask the UI to put the
+		# prompt back up: leaving it pending with nothing on screen would block
+		# every card and End Turn for the rest of the combat.
+		choice_requested.emit(pending_choice)
+
+
+## Re-raise the outstanding prompt. Lets the UI recover if it ever loses track of
+## one (an old save, a screen change mid-prompt) instead of dead-ending.
+func reassert_choice() -> bool:
+	if pending_choice.is_empty():
+		return false
+	choice_requested.emit(pending_choice)
+	return true
 
 
 # ═════════════════════════════════ Piles ═════════════════════════════════════

@@ -394,6 +394,10 @@ func _on_end_turn() -> void:
 	if combat == null or _busy or combat.phase != "player" or combat.finished:
 		return
 	if not combat.pending_choice.is_empty():
+		# Say why, and put the prompt back on screen if it went missing.
+		prompt_label.text = String(combat.pending_choice.get("prompt", "Resolve the prompt"))
+		prompt_label.visible = true
+		combat.reassert_choice()
 		return
 	_select(null)
 	_busy = true

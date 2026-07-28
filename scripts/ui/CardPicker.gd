@@ -14,6 +14,7 @@ const CARD_SCENE := preload("res://scenes/CardView.tscn")
 @onready var cancel_button: Button = $Panel/Buttons/CancelButton
 
 var _mode: String = "view"          ## view | select | instant
+var _can_cancel: bool = true        ## false for prompts that must be answered
 var _needed: int = 1
 var _selection: Array = []
 var _views: Array = []
@@ -44,10 +45,15 @@ func _setup(title: String, cards: Array, mode: String, count: int, combat,
 		can_cancel: bool) -> void:
 	_mode = mode
 	_needed = count
+	_can_cancel = can_cancel
 	_combat = combat
 	_selection.clear()
 	title_label.text = title
+	# Detach before freeing: queue_free() is deferred, so leaving the old cards
+	# parented would let the grid lay the new batch out after the stale ones.
 	for v in _views:
+		if v.get_parent() != null:
+			v.get_parent().remove_child(v)
 		v.queue_free()
 	_views.clear()
 	for c in cards:
@@ -65,8 +71,12 @@ func _setup(title: String, cards: Array, mode: String, count: int, combat,
 			name_hint.text = "%d card(s)." % cards.size()
 		"select":
 			name_hint.text = "Select %d card(s)." % count
+			if not can_cancel:
+				name_hint.text += "  This choice cannot be skipped."
 		"instant":
 			name_hint.text = "Click a card to choose it."
+			if not can_cancel:
+				name_hint.text += "  This choice cannot be skipped."
 	visible = true
 	move_to_front()
 
@@ -95,8 +105,22 @@ func _on_confirm() -> void:
 
 
 func _on_cancel() -> void:
+	# A mandatory prompt (a forced discard, exhaust, upgrade …) cannot be waived.
+	# Dismissing it would leave the combat waiting on a choice with nothing on
+	# screen to answer it, which locks the run.
+	if not _can_cancel:
+		return
 	visible = false
 	cancelled.emit()
+
+
+## Escape and other "just close it" gestures route through here so they respect
+## whether this particular prompt is dismissable.
+func request_close() -> bool:
+	if not _can_cancel:
+		return false
+	_on_cancel()
+	return true
 
 
 func close() -> void:
