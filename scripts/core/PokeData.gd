@@ -104,12 +104,6 @@ static func move_at(index: int) -> Dictionary:
 	return list[index]
 
 
-## National dex number for a species name, or 0 if it is not one of ours.
-static func dex_number(name: String) -> int:
-	var mon := mon(name)
-	return int(mon.get("id", 0)) if not mon.is_empty() else 0
-
-
 static func mon_index(name: String) -> int:
 	ensure_loaded()
 	return int(_mon_by_name.get(name, -1))

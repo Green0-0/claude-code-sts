@@ -12,6 +12,8 @@ var failed: int = 0
 
 func _ready() -> void:
 	main = get_parent()
+	# These assert on state the instant they act, so the flourish has to be off.
+	CardAnim.enabled = false
 	await get_tree().process_frame
 	_run()
 	print("[poke] %d passed, %d failed" % [passed, failed])

@@ -43,6 +43,20 @@ offset_right = 182.0
 offset_bottom = 190.0
 mouse_filter = 2
 
+[node name="Sprite" type="TextureRect" parent="Body"]
+layout_mode = 1
+anchor_right = 1.0
+anchor_bottom = 1.0
+offset_left = 4.0
+offset_top = 2.0
+offset_right = -4.0
+offset_bottom = -2.0
+grow_horizontal = 2
+grow_vertical = 2
+expand_mode = 1
+stretch_mode = 5
+mouse_filter = 2
+
 [node name="NameLabel" type="Label" parent="Body"]
 layout_mode = 1
 anchor_right = 1.0

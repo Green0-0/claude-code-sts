@@ -290,6 +290,17 @@ offset_right = 316.0
 offset_bottom = 432.0
 mouse_filter = 1
 
+[node name="Sprite" type="TextureRect" parent="Screens/CombatScreen/PlayerPanel"]
+layout_mode = 0
+offset_left = 96.0
+offset_top = 78.0
+offset_right = 296.0
+offset_bottom = 278.0
+expand_mode = 1
+stretch_mode = 5
+flip_h = true
+mouse_filter = 2
+
 [node name="NameLabel" type="Label" parent="Screens/CombatScreen/PlayerPanel"]
 layout_mode = 0
 offset_left = 10.0

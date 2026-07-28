@@ -11,6 +11,7 @@ const VIEW_SIZE := Vector2(190, 250)
 @onready var intent_label: Label = $IntentLabel
 @onready var intent_detail: Label = $IntentDetail
 @onready var body: Panel = $Body
+@onready var sprite: TextureRect = $Body/Sprite
 @onready var name_label: Label = $Body/NameLabel
 @onready var hp_bar: ProgressBar = $HpBar
 @onready var hp_label: Label = $HpBar/HpLabel
@@ -22,7 +23,6 @@ var actor: Actor = null
 var combat: Combat = null
 var index: int = 0
 var targeted: bool = false
-var sprite: PokeSprite = null
 
 
 func _ready() -> void:
@@ -45,6 +45,21 @@ func setup(a: Actor, cmb: Combat, idx: int) -> void:
 	refresh()
 
 
+## Takes a hit: knocked back and blanched, harder for an execution than a hex.
+func recoil(hard: bool) -> void:
+	var origin := position
+	var shove := Vector2(0, 18.0) if hard else Vector2(0, 7.0)
+	var t := create_tween()
+	t.set_parallel(true)
+	t.tween_property(self, "position", origin + shove, 0.05)
+	t.chain().tween_property(self, "position", origin, 0.28) \
+			.set_ease(Tween.EASE_OUT).set_trans(Tween.TRANS_ELASTIC)
+	if hard:
+		var f := create_tween()
+		f.tween_property(self, "modulate", Color(1.9, 0.75, 0.75), 0.04)
+		f.tween_property(self, "modulate", Color.WHITE, 0.3)
+
+
 func _style() -> void:
 	var tint := Color(0.42, 0.24, 0.28)
 	if actor != null:
@@ -57,17 +72,26 @@ func _style() -> void:
 		if actor.is_pokemon():
 			tint = PokeData.type_color(String(actor.poke_types[0])).darkened(
 					0.55 if actor.is_boss else 0.4)
+	# Soft, rounded and lightly translucent: the artwork should read as the
+	# subject, with the panel as a pastel cushion behind it rather than a frame.
 	var sb := StyleBoxFlat.new()
-	sb.bg_color = tint
-	sb.border_color = tint.lightened(0.25)
+	sb.bg_color = tint.lightened(0.08)
+	sb.bg_color.a = 0.92
+	sb.border_color = tint.lightened(0.45)
 	sb.set_border_width_all(2)
-	# Generous rounding and a soft halo: the sprite should look like it is
-	# sitting in a lit capsule rather than pinned to a box.
-	sb.set_corner_radius_all(20)
-	sb.shadow_color = Color(tint.r, tint.g, tint.b, 0.5)
+	sb.set_corner_radius_all(26)
+	sb.shadow_color = Color(0, 0, 0, 0.35)
 	sb.shadow_size = 8
 	body.add_theme_stylebox_override("panel", sb)
-	_attach_sprite(tint)
+
+	# The name only needs to be readable over the art, so it sits at the foot of
+	# the panel instead of behind the sprite.
+	var art := PokeSprites.texture_for_actor(actor)
+	sprite.texture = art
+	sprite.visible = art != null
+	if art != null:
+		name_label.vertical_alignment = VERTICAL_ALIGNMENT_BOTTOM
+		name_label.add_theme_font_size_override("font_size", 14)
 
 	UiTheme.style_hp_bar(hp_bar)
 
@@ -77,31 +101,6 @@ func _style() -> void:
 	rsb.set_border_width_all(3)
 	rsb.set_corner_radius_all(12)
 	target_ring.add_theme_stylebox_override("panel", rsb)
-
-
-## Enemies stand on the right of the line, so their sprites stay unmirrored and
-## look back toward the player. The name drops to the foot of the panel so it
-## does not sit across the artwork.
-func _attach_sprite(tint: Color) -> void:
-	if actor == null or not actor.is_pokemon():
-		return
-	var dex := PokeData.dex_number(actor.poke_name)
-	if dex <= 0 or not PokeSprite.exists_for(dex):
-		return
-	if sprite == null:
-		sprite = PokeSprite.new()
-		sprite.set_anchors_preset(Control.PRESET_FULL_RECT)
-		sprite.offset_top = 2
-		# The species and its typing sit on two lines at the foot of the panel,
-		# so the sprite has to stop above them rather than stand behind them.
-		sprite.offset_bottom = -34
-		sprite.foot_room = 6.0
-		sprite.shadow_colour = Color(0, 0, 0, 0.34)
-		body.add_child(sprite)
-		body.move_child(sprite, 0)
-	sprite.show_pokemon(dex, false)
-	name_label.vertical_alignment = VERTICAL_ALIGNMENT_BOTTOM
-	name_label.add_theme_font_size_override("font_size", 13)
 
 
 func refresh() -> void:
@@ -152,13 +151,6 @@ func refresh() -> void:
 		chip.tooltip_text = Statuses.describe(sid, int(s["stacks"]))
 		chip.mouse_filter = Control.MOUSE_FILTER_PASS
 		status_box.add_child(chip)
-
-
-## Where a cast should land: the card body, not the whole view. The view also
-## covers the intent above and the HP bar below, and an effect centred on that
-## sits off the artwork it is supposed to be hitting.
-func impact_rect() -> Rect2:
-	return body.get_global_rect()
 
 
 func set_targeted(value: bool) -> void:

@@ -17,9 +17,6 @@ const CLICK_SLOP := 12.0
 ## meant to sit above the hand must clear HAND_Z_DRAG — see Main.OVERLAY_Z.
 const HAND_Z_HOVER := 400
 const HAND_Z_DRAG := 500
-## Cast animations fly out of the hand, so they have to clear even a dragged
-## card. Still well under Main.OVERLAY_Z, so a prompt covers them.
-const CAST_Z := 700
 
 @onready var enemy_area: Control = $EnemyArea
 @onready var hand_area: Control = $HandArea
@@ -29,6 +26,7 @@ const CAST_Z := 700
 @onready var player_hp_label: Label = $PlayerPanel/HpBar/HpLabel
 @onready var player_block: Label = $PlayerPanel/BlockLabel
 @onready var player_status_box: HBoxContainer = $PlayerPanel/StatusBox
+@onready var player_sprite: TextureRect = $PlayerPanel/Sprite
 @onready var energy_label: Label = $EnergyOrb/EnergyLabel
 @onready var end_turn_button: Button = $EndTurnButton
 @onready var draw_button: Button = $Piles/DrawButton
@@ -49,10 +47,10 @@ var _drag_origin: Vector2 = Vector2.ZERO
 var _drag_active: bool = false
 var _hovered_enemy: EnemyView = null
 var _enemy_timer: Timer = null
-var cast_fx: CastFx = null
-var player_sprite: PokeSprite = null
 var _busy: bool = false
 var _log_lines: Array = []
+var _card_anim: CardAnim = null
+var _shake_origin: Vector2 = Vector2.ZERO
 
 
 func _ready() -> void:
@@ -65,14 +63,15 @@ func _ready() -> void:
 	_enemy_timer.timeout.connect(_advance_enemy_phase)
 	add_child(_enemy_timer)
 	target_line.visible = false
+	# Above the hand fan (HAND_Z_DRAG) so a flying card is never behind one, and
+	# below Main.OVERLAY_Z so the card picker still covers it.
+	_card_anim = CardAnim.new()
+	_card_anim.name = "CardAnim"
+	_card_anim.set_anchors_preset(Control.PRESET_FULL_RECT)
+	_card_anim.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_card_anim.z_index = 700
+	add_child(_card_anim)
 	set_process_input(true)
-	# Casts play above the hand fan but below the modal picker — see the z-index
-	# budget at the top of this file and Main.OVERLAY_Z.
-	cast_fx = CastFx.new()
-	cast_fx.name = "CastFx"
-	cast_fx.set_anchors_preset(Control.PRESET_FULL_RECT)
-	cast_fx.z_index = CAST_Z
-	add_child(cast_fx)
 	$EnergyOrb.add_theme_stylebox_override("panel", UiTheme.orb_style())
 	player_panel.add_theme_stylebox_override("panel", UiTheme.player_style())
 	UiTheme.style_hp_bar(player_hp_bar)
@@ -89,11 +88,9 @@ func begin(enemy_ids: Array, room_type: String) -> void:
 	combat.combat_finished.connect(_on_combat_finished)
 	combat.enemy_died.connect(_on_enemy_died)
 	combat.player_turn_started.connect(_on_player_turn_started)
-	combat.move_cast.connect(_on_move_cast)
 	_log_lines.clear()
 	combat_log.clear()
 	combat.setup(enemy_ids, room_type, Run.rng)
-	_setup_player_sprite()
 	_build_enemy_views()
 	_rebuild_hand()
 	_refresh_all()
@@ -113,12 +110,18 @@ func _clear() -> void:
 	combat = null
 	target_line.visible = false
 	_hovered_enemy = null
-	if cast_fx != null and is_instance_valid(cast_fx):
-		cast_fx.clear_all()
 	# Otherwise the last fight's targeting line ("… It's super effective!") is
 	# still on screen when the next one starts.
 	prompt_label.visible = false
 	prompt_label.text = ""
+	# Same for anything still in flight or still fading: a card mid-execution and
+	# its damage numbers would otherwise hang over the next encounter.
+	for layer in [_card_anim, float_layer]:
+		if layer == null:
+			continue
+		for child in layer.get_children():
+			layer.remove_child(child)
+			child.queue_free()
 
 
 func _build_enemy_views() -> void:
@@ -428,113 +431,88 @@ func _try_play(view: CardView, target_index: int) -> void:
 		for v in enemy_views:
 			if v.index == target_index:
 				v.flash()
-	combat.play_card(view.card, target_index)
+	if not CardAnim.enabled:
+		combat.play_card(view.card, target_index)
+		_clear_target_highlight()
+		return
+
+	# The card is resolved on the frame the animation lands, so the damage
+	# numbers and the blow arrive together rather than a beat apart.
+	var card := view.card
+	var kind := _anim_kind_for(card)
+	var target_view := _view_for_index(target_index)
+	var target_rect := _target_rect(kind, target_view)
+	var from_pos := _to_local(view.get_global_position())
+	view.visible = false
+	_busy = true
 	_clear_target_highlight()
+	await _card_anim.play(card, combat, "", card.tint(), from_pos, target_rect, kind,
+			func():
+				combat.play_card(card, target_index)
+				_impact_feedback(kind, target_view))
+	_busy = false
+	_refresh_all()
 
 
-# ═══════════════════════════════ Player sprite ═══════════════════════════════
-## Stands the player's Pokemon in its own panel, mirrored so it faces the enemy
-## line on the right — the arrangement the games use.
-##
-## The panel is laid out for a name and three rows of stats across its full
-## width, so making room means re-flowing it into two columns. That only happens
-## for a Pokemon run: an Ironclad has no sprite and keeps the original layout
-## exactly as the scene defines it.
-func _setup_player_sprite() -> void:
-	var mon := Run.player_mon()
-	if mon.is_empty():
-		return
-	var dex := int(mon.get("id", 0))
-	if dex <= 0 or not PokeSprite.exists_for(dex):
-		return
-
-	if player_sprite == null:
-		player_sprite = PokeSprite.new()
-		player_sprite.name = "PlayerSprite"
-		player_sprite.shadow_colour = Color(0, 0, 0, 0.32)
-		player_panel.add_child(player_sprite)
-		player_panel.move_child(player_sprite, 0)
-	player_sprite.position = Vector2(6, 26)
-	player_sprite.size = Vector2(124, 132)
-	player_sprite.show_pokemon(dex, true)
-
-	# Stats move over to the right of the sprite.
-	var left := 132.0
-	var right := player_panel.size.x - 12.0
-	_place(player_name, left, 10.0, right, 42.0)
-	_place(player_hp_bar, left + 4.0, 48.0, right - 4.0, 76.0)
-	_place(player_block, left + 4.0, 82.0, right - 4.0, 108.0)
-	_place(player_status_box, left, 112.0, right, 172.0)
+## Which choreography a card gets: attacks are executions, self-targeting status
+## is a blessing, and anything status aimed at someone else is a hex.
+func _anim_kind_for(card: Card) -> int:
+	if card.type() == "attack":
+		return CardAnim.Kind.ATTACK
+	if card.effective_target_kind() in ["self", "none"]:
+		return CardAnim.Kind.BLESS
+	return CardAnim.Kind.HEX
 
 
-func _place(node: Control, l: float, t: float, r: float, b: float) -> void:
-	node.set_anchors_preset(Control.PRESET_TOP_LEFT)
-	node.position = Vector2(l, t)
-	node.size = Vector2(r - l, b - t)
-
-
-# ══════════════════════════════ Cast animations ══════════════════════════════
-## Turns "this card is being played" into one of CastFx's three routines. The
-## engine says what happened; everything about how it looks is decided here.
-func _on_move_cast(info: Dictionary) -> void:
-	if cast_fx == null or not is_instance_valid(cast_fx):
-		return
-	var source: Actor = info.get("source", null)
-	var target: Actor = info.get("target", null)
-	var card: Card = info.get("card", null)
-	var effects: Array = info.get("effects", [])
-	if source == null:
-		return
-
-	var on_self := CastFx.targets_self(effects, String(info.get("card_target", "")))
-	var kind := CastFx.classify(effects, source.is_player, on_self)
-
-	# Who it lands on: itself, the player, or one of the enemy row.
-	var landed_on: Actor = source if on_self else target
-	var view := _view_for(landed_on)
-	if view == null:
-		return
-
-	var global_rect: Rect2 = view.impact_rect() if view.has_method("impact_rect") \
-			else view.get_global_rect()
-	var inv := cast_fx.get_global_transform().affine_inverse()
-	var rect := Rect2(inv * global_rect.position, global_rect.size)
-	var from := _cast_origin(source)
-	cast_fx.play(kind, String(info.get("name", "")), _cast_colour(card, source, effects),
-			from, rect, view)
-
-
-## The on-screen thing representing an actor: its enemy card, or the player panel.
-func _view_for(who: Actor) -> Control:
-	if who == null:
-		return null
-	if who.is_player:
-		return player_panel
+func _view_for_index(target_index: int) -> Control:
 	for v in enemy_views:
-		if v.actor == who and v.visible:
+		if v.index == target_index and v.visible:
+			return v
+	for v in enemy_views:
+		if v.visible:
 			return v
 	return null
 
 
-## Casts rise out of the hand for the player, and out of the caster for enemies.
-func _cast_origin(source: Actor) -> Vector2:
-	var inv := cast_fx.get_global_transform().affine_inverse()
-	if source.is_player:
-		var hand_rect := hand_area.get_global_rect()
-		return inv * Vector2(hand_rect.get_center().x, hand_rect.position.y + 40.0)
-	var view := _view_for(source)
-	if view != null:
-		return inv * view.get_global_rect().get_center()
-	return inv * get_global_rect().get_center()
+## Where the card is headed. A blessing lands on its caster; everything else on
+## whoever it was aimed at.
+func _target_rect(kind: int, target_view: Control) -> Rect2:
+	if kind == CardAnim.Kind.BLESS or target_view == null:
+		return _local_rect(player_panel)
+	return _local_rect(target_view)
 
 
-func _cast_colour(card: Card, source: Actor, effects: Array) -> Color:
-	if card != null:
-		return card.tint()
-	# An enemy move borrows its Pokemon's type colour, or the Spire's intent hue.
-	if source.is_pokemon() and not source.poke_types.is_empty():
-		return PokeData.type_color(String(source.poke_types[0]))
-	return EnemyLibrary.intent_color(String(source.intent.get("kind", "attack")))
+func _to_local(global_pos: Vector2) -> Vector2:
+	return get_global_transform().affine_inverse() * global_pos
+
+
+func _local_rect(c: Control) -> Rect2:
+	var r := c.get_global_rect()
+	return Rect2(_to_local(r.position), r.size)
+
+
+## The felt part of a landing: the victim recoils, and an execution shakes the
+## whole screen.
+func _impact_feedback(kind: int, target_view: Control) -> void:
+	if target_view != null and target_view.has_method("recoil"):
+		target_view.recoil(kind == CardAnim.Kind.ATTACK)
+	if kind == CardAnim.Kind.ATTACK:
+		_shake(9.0, 0.22)
+	elif kind == CardAnim.Kind.HEX:
+		_shake(4.0, 0.16)
+
+
+func _shake(amount: float, duration: float) -> void:
+	if _shake_origin == Vector2.ZERO:
+		_shake_origin = position
+	var t := create_tween()
+	var steps := 6
+	for i in range(steps):
+		var falloff := amount * (1.0 - float(i) / float(steps))
+		t.tween_property(self, "position", _shake_origin + Vector2(
+				randf_range(-falloff, falloff), randf_range(-falloff, falloff)),
+				duration / float(steps))
+	t.tween_property(self, "position", _shake_origin, duration / float(steps))
 
 
 func _on_end_turn() -> void:
@@ -561,13 +539,72 @@ func _advance_enemy_phase() -> void:
 		_busy = false
 		end_turn_button.disabled = false
 		return
-	var more := combat.step_enemy()
+	var actor: Actor = combat.peek_enemy() if CardAnim.enabled else null
+	if actor != null and not actor.intent.is_empty():
+		await _animate_enemy_move(actor)
+		if combat == null or combat.finished:
+			_busy = false
+			end_turn_button.disabled = false
+			return
+	else:
+		combat.step_enemy()
 	_refresh_all()
-	if more:
-		_enemy_timer.start(0.55)
+	if combat.peek_enemy() != null:
+		_enemy_timer.start(0.2)
+	elif not combat.finished and combat.phase == "enemy":
+		# Nothing left to act, but the phase still has to be closed out.
+		combat.step_enemy()
+		_refresh_all()
+		_busy = false
+		end_turn_button.disabled = combat.finished
 	else:
 		_busy = false
 		end_turn_button.disabled = combat.finished
+
+
+## An enemy's move gets the same choreography as a card, with a stand-in token
+## for the card it does not have.
+func _animate_enemy_move(actor: Actor) -> void:
+	var view := _view_for_actor(actor)
+	var intent := String(actor.intent.get("kind", "unknown"))
+	var move_name := String(actor.intent.get("name", "…"))
+	var kind := CardAnim.Kind.HEX
+	if intent.begins_with("attack"):
+		kind = CardAnim.Kind.ATTACK
+	elif intent in ["defend", "buff", "sleep", "unknown", "escape"]:
+		kind = CardAnim.Kind.BLESS
+
+	# A blessing stays with the caster; anything else is coming for the player.
+	var target_rect := _local_rect(view) if kind == CardAnim.Kind.BLESS \
+			else _local_rect(player_panel)
+	var from_pos := _local_rect(view).position if view != null \
+			else Vector2(size.x * 0.5, 120.0)
+	var tint := EnemyLibrary.intent_color(intent)
+	if actor.is_pokemon() and not actor.poke_types.is_empty():
+		tint = PokeData.type_color(String(actor.poke_types[0]))
+
+	await _card_anim.play(null, combat, move_name, tint, from_pos, target_rect, kind,
+			func():
+				combat.step_enemy()
+				_impact_feedback(kind, null if kind != CardAnim.Kind.BLESS else view)
+				if kind != CardAnim.Kind.BLESS:
+					_player_recoil(kind == CardAnim.Kind.ATTACK))
+
+
+func _view_for_actor(a: Actor) -> Control:
+	for v in enemy_views:
+		if v.actor == a:
+			return v
+	return null
+
+
+## The player has no EnemyView to recoil, so its panel takes the hit instead.
+func _player_recoil(hard: bool) -> void:
+	var origin := player_panel.position
+	var t := player_panel.create_tween()
+	t.tween_property(player_panel, "position", origin + Vector2(-14.0 if hard else -6.0, 0), 0.05)
+	t.tween_property(player_panel, "position", origin, 0.16) \
+			.set_ease(Tween.EASE_OUT).set_trans(Tween.TRANS_ELASTIC)
 
 
 func _on_player_turn_started() -> void:
@@ -586,6 +623,10 @@ func _refresh_all() -> void:
 		return
 	var p := combat.player
 	player_name.text = p.name
+	# Flipped in the scene, so a player Pokemon faces across at the enemies.
+	var art := PokeSprites.texture_for_actor(p)
+	player_sprite.texture = art
+	player_sprite.visible = art != null
 	player_hp_bar.max_value = max(1, p.max_hp)
 	player_hp_bar.value = p.hp
 	player_hp_label.text = "%d / %d" % [p.hp, p.max_hp]

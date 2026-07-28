@@ -34,6 +34,9 @@ var _stall: int = 0
 
 func _ready() -> void:
 	main = get_parent()
+	# Card animations resolve their effects on a delay, which this harness has no
+	# way to wait for — and 1900 cards at ~0.8s each would take half an hour.
+	CardAnim.enabled = false
 	Engine.time_scale = TIME_SCALE
 	Engine.max_fps = 0
 	var args: Array = []
