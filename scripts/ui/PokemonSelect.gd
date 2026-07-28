@@ -90,10 +90,10 @@ func _make_row(character_id: String) -> Button:
 		type_text += ("/" if type_text != "" else "") + PokeData.display_name(String(t))
 
 	var btn := Button.new()
-	btn.custom_minimum_size = Vector2(0, 46)
+	btn.custom_minimum_size = Vector2(0, 54)
 	btn.alignment = HORIZONTAL_ALIGNMENT_LEFT
 	btn.add_theme_font_size_override("font_size", 14)
-	btn.text = "#%-4d %-13s %-16s  BST %3d   HP %3d  Nrg %d   %d/%d/%d/%d/%d/%d" % [
+	btn.text = "        #%-4d %-13s %-16s  BST %3d   HP %3d  Nrg %d   %d/%d/%d/%d/%d/%d" % [
 		int(mon["id"]), String(d["name"]), type_text, int(d["bst"]), int(d["max_hp"]),
 		PokeBalance.energy_for(mon),
 		int(stats["hp"]), int(stats["atk"]), int(stats["df"]),
@@ -101,4 +101,11 @@ func _make_row(character_id: String) -> Button:
 	btn.tooltip_text = String(d["blurb"])
 	btn.add_theme_color_override("font_color", PokeData.type_color(String(types[0])))
 	btn.pressed.connect(func(): _pick(character_id))
+
+	# The portrait sits in the gap the leading spaces above leave for it.
+	var tex := PokeSprites.for_dex(int(mon["id"]))
+	if tex != null:
+		var icon := PokeSprites.make_rect(tex, Vector2(46, 46))
+		icon.position = Vector2(5, 4)
+		btn.add_child(icon)
 	return btn

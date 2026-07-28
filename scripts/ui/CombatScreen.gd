@@ -34,6 +34,7 @@ const HAND_Z_DRAG := 500
 @onready var combat_log: RichTextLabel = $LogPanel/CombatLog
 @onready var prompt_label: Label = $PromptLabel
 @onready var float_layer: Control = $FloatLayer
+@onready var fx_layer: CardFxLayer = $FxLayer
 @onready var target_line: Line2D = $TargetLine
 @onready var turn_label: Label = $TurnLabel
 
@@ -48,6 +49,9 @@ var _hovered_enemy: EnemyView = null
 var _enemy_timer: Timer = null
 var _busy: bool = false
 var _log_lines: Array = []
+var _player_sprite: TextureRect = null
+var _player_sprite_home: Vector2 = Vector2.ZERO
+var _bob_phase: float = 0.0
 
 
 func _ready() -> void:
@@ -67,6 +71,38 @@ func _ready() -> void:
 
 
 # ════════════════════════════════ Combat lifecycle ═══════════════════════════
+## The player's own portrait, on their panel. Faces right, toward the enemies.
+func _build_player_sprite() -> void:
+	if _player_sprite != null and is_instance_valid(_player_sprite):
+		_player_sprite.queue_free()
+		_player_sprite = null
+	var tex := PokeSprites.for_actor(combat.player if combat != null else null)
+	if tex == null:
+		return
+	# Fit the gap under the HP bar rather than assuming one: the portrait must
+	# not sit on top of the numbers it belongs to.
+	var top := player_hp_bar.position.y + player_hp_bar.size.y + 6.0
+	var room := player_panel.size.y - top - 10.0
+	# These sprites carry a lot of transparent padding, so a box sized to the
+	# gap leaves the Pokemon itself looking tiny. Oversize the box against the
+	# panel's width and let the padding absorb the overhang.
+	var side: float = clampf(minf(room * 1.7, player_panel.size.x - 40.0),
+			64.0, PokeSprites.CELL * 2.0)
+	_player_sprite = PokeSprites.make_rect(tex, Vector2(side, side))
+	_player_sprite_home = Vector2((player_panel.size.x - side) * 0.5,
+			top + (room - side) * 0.5)
+	_player_sprite.position = _player_sprite_home
+	player_panel.add_child(_player_sprite)
+	set_process(true)
+
+
+func _process(delta: float) -> void:
+	if _player_sprite == null or not is_instance_valid(_player_sprite):
+		return
+	_bob_phase += delta * 1.6
+	_player_sprite.position = _player_sprite_home + Vector2(0, sin(_bob_phase) * 3.5)
+
+
 func begin(enemy_ids: Array, room_type: String) -> void:
 	_clear()
 	combat = Combat.new()
@@ -80,6 +116,7 @@ func begin(enemy_ids: Array, room_type: String) -> void:
 	_log_lines.clear()
 	combat_log.clear()
 	combat.setup(enemy_ids, room_type, Run.rng)
+	_build_player_sprite()
 	_build_enemy_views()
 	_rebuild_hand()
 	_refresh_all()
@@ -408,12 +445,76 @@ func _try_play(view: CardView, target_index: int) -> void:
 	if selected_view == view:
 		selected_view = null
 	view.set_selected(false)
-	if target_index >= 0 and target_index < enemy_views.size():
-		for v in enemy_views:
-			if v.index == target_index:
-				v.flash()
-	combat.play_card(view.card, target_index)
 	_clear_target_highlight()
+
+	# The card resolves on impact, not on release, so the numbers land at the
+	# same moment the animation says they do. _busy keeps the hand locked
+	# meanwhile — without it a second card could be played mid-execution.
+	var card := view.card
+	_busy = true
+	view.visible = false
+	await _play_execution(card, target_index)
+	_busy = false
+	if combat == null or combat.finished:
+		return
+	combat.play_card(card, target_index)
+
+
+## Flies the card to whatever it is aimed at and returns once it has landed.
+func _play_execution(card: Card, target_index: int) -> void:
+	var target := _target_actor(card, target_index)
+	var hostile := _is_hostile(card, target)
+	var from := _hand_origin()
+	var to := _actor_centre(target)
+	var size := EnemyView.VIEW_SIZE if (target != null and not target.is_player) \
+			else player_panel.size
+	await fx_layer.execute(CardFxLayer.mode_for(card, hostile), from, to,
+			card.tint(), card.display_name(), size)
+
+
+## Who the card is going to hit, which is not always who was clicked: a
+## self-targeting card lands on the player however it was aimed.
+func _target_actor(card: Card, target_index: int) -> Actor:
+	if combat == null:
+		return null
+	match card.effective_target_kind():
+		"self", "none":
+			return combat.player
+	var living := combat.living_enemies()
+	if living.is_empty():
+		return combat.player
+	if target_index >= 0 and target_index < living.size():
+		return living[target_index]
+	return living[0]
+
+
+## Whether this counts as something done *to* the target rather than for it,
+## which is what picks the curse animation over the blessing.
+func _is_hostile(card: Card, target: Actor) -> bool:
+	if target == null or target.is_player:
+		return false
+	for eff in card.effects():
+		match String(eff.get("op", "")):
+			"poke_status", "status":
+				if String(eff.get("target", "")) != "self":
+					return true
+			"poke_stage":
+				if String(eff.get("target", "")) != "self":
+					return true
+	return card.effective_target_kind() in ["enemy", "all", "random"]
+
+
+func _hand_origin() -> Vector2:
+	return Vector2(hand_area.position.x + hand_area.size.x * 0.5,
+			hand_area.position.y + hand_area.size.y - 150.0)
+
+
+func _actor_centre(who: Actor) -> Vector2:
+	if who != null and not who.is_player:
+		for v in enemy_views:
+			if v.actor == who:
+				return enemy_area.position + v.position + EnemyView.VIEW_SIZE * 0.5
+	return player_panel.position + player_panel.size * 0.5
 
 
 func _on_end_turn() -> void:
@@ -440,13 +541,36 @@ func _advance_enemy_phase() -> void:
 		_busy = false
 		end_turn_button.disabled = false
 		return
+	# Read the intent before stepping: step_enemy resolves the move and then
+	# picks the next one, so afterwards it is too late to know what was used.
+	var actor := combat.next_enemy_to_act()
+	if actor != null:
+		await _enemy_execution(actor)
+		if combat == null or combat.finished:
+			_busy = false
+			return
 	var more := combat.step_enemy()
 	_refresh_all()
 	if more:
-		_enemy_timer.start(0.55)
+		_enemy_timer.start(0.45)
 	else:
 		_busy = false
 		end_turn_button.disabled = combat.finished
+
+
+## An enemy's move gets the same three-act treatment as a card, flying from the
+## enemy to the player.
+func _enemy_execution(who: Actor) -> void:
+	var intent: Dictionary = who.intent
+	if intent.is_empty():
+		return
+	var kind := String(intent.get("kind", "unknown"))
+	var colour := EnemyLibrary.intent_color(kind)
+	if who.is_pokemon() and not who.poke_types.is_empty():
+		colour = PokeData.type_color(String(who.poke_types[0]))
+	await fx_layer.execute(CardFxLayer.mode_for_intent(kind),
+			_actor_centre(who), _actor_centre(combat.player), colour,
+			String(intent.get("name", "?")), player_panel.size)
 
 
 func _on_player_turn_started() -> void:

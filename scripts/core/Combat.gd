@@ -395,6 +395,19 @@ func end_turn() -> void:
 		return
 
 
+## Who step_enemy() would act with next, without acting. The UI needs this to
+## animate a move before it resolves, since afterwards the intent has already
+## been replaced with the next one.
+func next_enemy_to_act() -> Actor:
+	if finished or phase != "enemy":
+		return null
+	for i in range(_enemy_index, _enemy_order.size()):
+		var e: Actor = _enemy_order[i]
+		if e.alive and not e.is_dead():
+			return e
+	return null
+
+
 ## Advance the enemy phase by one action. Returns true while work remains.
 func step_enemy() -> bool:
 	if finished:

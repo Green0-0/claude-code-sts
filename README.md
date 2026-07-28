@@ -29,8 +29,9 @@ godot --headless -- --poke-test    # 159 assertions on the Pokémon layer
 godot --headless -- --smoke        # one self-played run, prints a report
 godot --headless -- --smoke-deep   # 8 runs, immortal player, full 3-act coverage
 godot --headless -- --smoke-poke   # 8 self-played Pokémon runs
-godot -- --click-test              # 34 assertions driven by synthesized clicks
+godot -- --click-test              # 41 assertions driven by synthesized clicks
 godot --headless -- --shots        # save one PNG per screen to user://shots
+godot -- --poke-shots              # Pokémon screens + each execution filmed frame by frame
 ```
 
 `--click-test` needs a real display (the headless dummy display server does not do
@@ -294,11 +295,73 @@ while asleep, **Yawn** matures into Sleep, **Heal Block** stops healing and
 **Embargo** seals potions. All seven **stat stages** are modelled at the real
 ±50%-per-step multipliers, capped at ±6, and Artifact can shrug off a drop.
 
+### Sprites
+
+Every species wears its own art, from
+[github.com/PokeAPI/sprites](https://github.com/PokeAPI/sprites) — the 96×96
+pixel-art front sprites, drawn with nearest-neighbour filtering so they stay
+crisp scaled up. They appear on the enemy cards, on the player's panel, and
+beside every row of the dex picker, with a slow idle bob and a squash-recoil
+when something lands on them.
+
+```bash
+python3 tools/fetch_sprites.py    # 1025 PNGs from the sprite repo (~1 MB)
+python3 tools/build_atlas.py      # packs them into assets/pokemon_atlas.png
+```
+
+The atlas is the whole point of the second step: 1025 loose PNGs would mean 1025
+Godot `.import` files and 1025 disk reads, against one 2.2 MB texture and one of
+each. The grid layout is implicit — cell = dex − 1 across 33 columns — so there
+is no manifest to fall out of step with the data.
+
+The HOME renders and official artwork were the other candidates and were passed
+over on size: the same dex is 80 MB and 120 MB respectively, and neither scales
+into a card frame as cleanly as pixel art does.
+
+### Card execution
+
+Playing a card is a performance, and it resolves **on impact** rather than on
+release, so the numbers land on the frame the animation says they do. The hand
+is locked while one is running. Enemies get the same treatment, their move
+flying at you from wherever they stand.
+
+There are three routines, and the third is a lie:
+
+**Attack** — the card lifts away weightless: rising, paling, swelling, turning
+slightly, eased *out* so it looks lifted rather than thrown. It hangs. Then
+everything the ascent gave away comes back at once — eased *in*, still
+accelerating when it arrives, scale snapping down as it buries itself. On
+contact the screen kicks, the frame holds still for a beat of hitstop, and the
+target takes three gashes: one committed stroke and two raking alongside it,
+each a hot white core inside a wider soft edge, wiping open fast and fading.
+A shockwave rings out and shrapnel scatters under gravity.
+
+**Blessing** (a status card on yourself) — the same ascent, a touch slower and
+softer. Then it settles, eased in and out, and *melts*: losing height far faster
+than width, as though soaking in. The ripple starts before it has finished
+going — four concentric rings running outward and flattening as they spread,
+squashed vertically so they read as a surface seen at an angle rather than as
+flat circles.
+
+**Curse** (a status card on someone else) — opens as the blessing, beat for
+beat, with nothing to read. At 72% of the descent the pretence drops: it snaps
+the rest of the way down on an exponential ease in a twelfth of the time, and
+the target breaks like a mirror — seven to nine radial fractures with branches
+peeling off them, each a dark split with a pale glint caught along it, then the
+glass falls out of the frame.
+
+`CardFxLayer` choreographs the flight; `CardFx` draws the marks. Everything is
+vector drawing rather than sprites, so each mark is sized to whatever it landed
+on — off the target's *shorter* side, since using the diagonal lets a tall card's
+marks hang past its edges and read as belonging to nothing.
+
 ### Where it lives
 
 ```
 tools/fetch_pokeapi.py   mirrors the API into .pokecache/
 tools/build_data.py      compacts the cache into data/*.json
+tools/fetch_sprites.py   pulls sprites from the PokeAPI sprite repo
+tools/build_atlas.py     packs them into assets/pokemon_atlas.png
 scripts/core/
   PokeData.gd            loads data/, answers the type chart
   PokeBalance.gd         every Pokémon-number → Spire-number conversion
@@ -306,9 +369,13 @@ scripts/core/
   PokeMobs.gd            species → enemy definition, moveset and AI
   PokeCharacters.gd      species → playable character, deck and reward pool
   PokeEncounters.gd      BST-weighted encounter tables
-scripts/ui/PokemonSelect.gd   searchable dex picker
+  PokeSprites.gd         atlas lookup: dex number → texture
+scripts/ui/
+  PokemonSelect.gd       searchable dex picker
+  CardFxLayer.gd         card execution: the flight and its choreography
+  CardFx.gd              the marks — gashes, shockwaves, ripples, fractures
 scripts/dev/PokeTest.gd       159 assertions over the whole layer
-scripts/dev/Shot.gd           --poke-shots, one PNG per Pokémon-mode screen
+scripts/dev/Shot.gd           --poke-shots, screens plus each execution filmed
 ```
 
 The existing libraries delegate rather than branch everywhere: `CardLibrary`,

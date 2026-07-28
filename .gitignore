@@ -3,6 +3,10 @@
 # Raw PokeAPI mirror (~200 MB). Rebuilt by tools/fetch_pokeapi.py; the compact
 # game data it produces lives in data/ and is committed.
 .pokecache/
+# Loose sprite downloads. tools/build_atlas.py packs these into
+# assets/pokemon_atlas.png, which is what the game loads and what is committed —
+# 1025 individual PNGs would drag 1025 Godot .import files along with them.
+assets/sprites/
 # Machine-local Claude Code permissions
 .claude/settings.local.json
 # Exported builds

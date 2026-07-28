@@ -4,14 +4,25 @@ extends RefCounted
 ## Builds the game's Theme in code and hands it to the Window, so every screen
 ## picks up the same panels, buttons and bars without per-node overrides.
 
-const BG := Color(0.086, 0.086, 0.114)
-const INK := Color(0.902, 0.902, 0.925)
-const DIM := Color(0.62, 0.62, 0.69)
-const GOLD := Color(0.945, 0.827, 0.400)
-const BLOOD := Color(0.741, 0.239, 0.239)
+## A softer palette than a dungeon crawler usually wears: the greys carry a
+## little violet so they read as dusk rather than as soot, and the accents are
+## pastel. Sprites are bright pixel art and sit better against warm dark than
+## against neutral black.
+const BG := Color(0.098, 0.090, 0.137)
+const INK := Color(0.937, 0.925, 0.961)
+const DIM := Color(0.655, 0.639, 0.729)
+const GOLD := Color(0.980, 0.851, 0.502)
+const BLOOD := Color(0.906, 0.435, 0.522)
+const MINT := Color(0.545, 0.867, 0.749)
+const PANEL := Color(0.145, 0.133, 0.192)
+const PANEL_EDGE := Color(0.278, 0.255, 0.353)
+
+## Corners are generously rounded throughout — it is the cheapest and most
+## reliable way to make a UI read as friendly rather than severe.
+const RADIUS := 14
 
 
-static func _box(bg: Color, border: Color, radius: int = 8, width: int = 2) -> StyleBoxFlat:
+static func _box(bg: Color, border: Color, radius: int = RADIUS, width: int = 2) -> StyleBoxFlat:
 	var sb := StyleBoxFlat.new()
 	sb.bg_color = bg
 	sb.border_color = border
@@ -29,16 +40,14 @@ static func build() -> Theme:
 	t.default_font_size = 15
 
 	# ── Panels ────────────────────────────────────────────────────────────────
-	t.set_stylebox("panel", "Panel", _box(Color(0.106, 0.106, 0.137),
-			Color(0.208, 0.208, 0.259)))
-	t.set_stylebox("panel", "PanelContainer", _box(Color(0.106, 0.106, 0.137),
-			Color(0.208, 0.208, 0.259)))
+	t.set_stylebox("panel", "Panel", _box(PANEL, PANEL_EDGE))
+	t.set_stylebox("panel", "PanelContainer", _box(PANEL, PANEL_EDGE))
 
 	# ── Buttons ───────────────────────────────────────────────────────────────
-	var normal := _box(Color(0.145, 0.145, 0.184), Color(0.267, 0.267, 0.329))
-	var hover := _box(Color(0.216, 0.216, 0.267), GOLD.darkened(0.35))
-	var pressed := _box(Color(0.106, 0.106, 0.137), GOLD.darkened(0.15))
-	var disabled := _box(Color(0.114, 0.114, 0.137), Color(0.184, 0.184, 0.216))
+	var normal := _box(Color(0.192, 0.176, 0.251), Color(0.318, 0.294, 0.404), 12)
+	var hover := _box(Color(0.263, 0.239, 0.341), GOLD.darkened(0.2), 12)
+	var pressed := _box(Color(0.153, 0.141, 0.208), GOLD, 12)
+	var disabled := _box(Color(0.137, 0.129, 0.176), Color(0.208, 0.196, 0.251), 12)
 	t.set_stylebox("normal", "Button", normal)
 	t.set_stylebox("hover", "Button", hover)
 	t.set_stylebox("pressed", "Button", pressed)
@@ -55,13 +64,13 @@ static func build() -> Theme:
 
 	# ── Health / progress bars ───────────────────────────────────────────────
 	var bar_bg := StyleBoxFlat.new()
-	bar_bg.bg_color = Color(0.129, 0.114, 0.125)
-	bar_bg.border_color = Color(0.29, 0.24, 0.25)
+	bar_bg.bg_color = Color(0.180, 0.145, 0.196)
+	bar_bg.border_color = Color(0.361, 0.294, 0.396)
 	bar_bg.set_border_width_all(1)
-	bar_bg.set_corner_radius_all(5)
+	bar_bg.set_corner_radius_all(8)
 	var bar_fill := StyleBoxFlat.new()
 	bar_fill.bg_color = BLOOD
-	bar_fill.set_corner_radius_all(5)
+	bar_fill.set_corner_radius_all(8)
 	t.set_stylebox("background", "ProgressBar", bar_bg)
 	t.set_stylebox("fill", "ProgressBar", bar_fill)
 	t.set_color("font_color", "ProgressBar", INK)
@@ -75,11 +84,11 @@ static func build() -> Theme:
 
 	# ── Scrolling ─────────────────────────────────────────────────────────────
 	var grabber := StyleBoxFlat.new()
-	grabber.bg_color = Color(0.32, 0.32, 0.38)
-	grabber.set_corner_radius_all(4)
+	grabber.bg_color = Color(0.400, 0.373, 0.494)
+	grabber.set_corner_radius_all(6)
 	var track := StyleBoxFlat.new()
-	track.bg_color = Color(0.12, 0.12, 0.15)
-	track.set_corner_radius_all(4)
+	track.bg_color = Color(0.153, 0.141, 0.196)
+	track.set_corner_radius_all(6)
 	for cls in ["VScrollBar", "HScrollBar"]:
 		t.set_stylebox("scroll", cls, track)
 		t.set_stylebox("grabber", cls, grabber)
@@ -92,13 +101,13 @@ static func build() -> Theme:
 ## inside another styled control does not always inherit the theme's fill.
 static func style_hp_bar(bar: ProgressBar) -> void:
 	var bg := StyleBoxFlat.new()
-	bg.bg_color = Color(0.153, 0.106, 0.114)
-	bg.border_color = Color(0.35, 0.24, 0.26)
+	bg.bg_color = Color(0.180, 0.145, 0.196)
+	bg.border_color = Color(0.361, 0.294, 0.396)
 	bg.set_border_width_all(1)
-	bg.set_corner_radius_all(5)
+	bg.set_corner_radius_all(8)
 	var fill := StyleBoxFlat.new()
 	fill.bg_color = BLOOD
-	fill.set_corner_radius_all(5)
+	fill.set_corner_radius_all(8)
 	bar.add_theme_stylebox_override("background", bg)
 	bar.add_theme_stylebox_override("fill", fill)
 
@@ -106,18 +115,22 @@ static func style_hp_bar(bar: ProgressBar) -> void:
 ## A round, gold-rimmed panel for the energy orb.
 static func orb_style() -> StyleBoxFlat:
 	var sb := StyleBoxFlat.new()
-	sb.bg_color = Color(0.18, 0.15, 0.09)
+	sb.bg_color = Color(0.239, 0.196, 0.129)
 	sb.border_color = GOLD
 	sb.set_border_width_all(3)
 	sb.set_corner_radius_all(48)
+	sb.shadow_color = Color(GOLD.r, GOLD.g, GOLD.b, 0.25)
+	sb.shadow_size = 8
 	return sb
 
 
 ## The player's portrait panel.
 static func player_style() -> StyleBoxFlat:
 	var sb := StyleBoxFlat.new()
-	sb.bg_color = Color(0.13, 0.12, 0.16)
-	sb.border_color = Color(0.36, 0.32, 0.42)
+	sb.bg_color = Color(0.169, 0.153, 0.224)
+	sb.border_color = Color(0.404, 0.365, 0.482)
 	sb.set_border_width_all(2)
-	sb.set_corner_radius_all(10)
+	sb.set_corner_radius_all(RADIUS)
+	sb.shadow_color = Color(0, 0, 0, 0.35)
+	sb.shadow_size = 6
 	return sb
