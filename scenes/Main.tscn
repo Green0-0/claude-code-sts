@@ -290,20 +290,12 @@ offset_right = 316.0
 offset_bottom = 432.0
 mouse_filter = 1
 
-[node name="Sprite" type="TextureRect" parent="Screens/CombatScreen/PlayerPanel"]
-layout_mode = 0
-offset_left = 12.0
-offset_top = 40.0
-offset_right = 116.0
-offset_bottom = 172.0
-mouse_filter = 2
-
 [node name="NameLabel" type="Label" parent="Screens/CombatScreen/PlayerPanel"]
 layout_mode = 0
-offset_left = 120.0
-offset_top = 8.0
-offset_right = 292.0
-offset_bottom = 40.0
+offset_left = 10.0
+offset_top = 10.0
+offset_right = 290.0
+offset_bottom = 44.0
 theme_override_font_sizes/font_size = 19
 text = "The Ironclad"
 horizontal_alignment = 1
@@ -311,10 +303,10 @@ vertical_alignment = 1
 
 [node name="HpBar" type="ProgressBar" parent="Screens/CombatScreen/PlayerPanel"]
 layout_mode = 0
-offset_left = 124.0
-offset_top = 46.0
-offset_right = 286.0
-offset_bottom = 74.0
+offset_left = 20.0
+offset_top = 52.0
+offset_right = 280.0
+offset_bottom = 80.0
 max_value = 80.0
 value = 80.0
 show_percentage = false
@@ -334,10 +326,10 @@ vertical_alignment = 1
 
 [node name="BlockLabel" type="Label" parent="Screens/CombatScreen/PlayerPanel"]
 layout_mode = 0
-offset_left = 124.0
-offset_top = 80.0
-offset_right = 286.0
-offset_bottom = 104.0
+offset_left = 20.0
+offset_top = 86.0
+offset_right = 280.0
+offset_bottom = 114.0
 theme_override_colors/font_color = Color(0.65, 0.82, 1, 1)
 theme_override_font_sizes/font_size = 18
 text = "🛡 0"
@@ -346,10 +338,10 @@ vertical_alignment = 1
 
 [node name="StatusBox" type="HBoxContainer" parent="Screens/CombatScreen/PlayerPanel"]
 layout_mode = 0
-offset_left = 120.0
-offset_top = 108.0
-offset_right = 292.0
-offset_bottom = 172.0
+offset_left = 10.0
+offset_top = 118.0
+offset_right = 290.0
+offset_bottom = 176.0
 theme_override_constants/separation = 8
 alignment = 1
 

@@ -1,17 +1,20 @@
 #!/usr/bin/env python3
-"""Download the PokeAPI sprite set into assets/sprites/pokemon/.
+"""Download the PokeAPI sprite set the game draws with.
 
-Source: https://github.com/PokeAPI/sprites — the front-default sprites, which are
-small (~1.3 MB for the whole dex) and consistent across all nine generations.
-The player's own Pokemon is drawn from the same sprite mirrored horizontally, so
-it faces the enemy; see SpriteCache.gd.
+Takes the front-default sprites from github.com/PokeAPI/sprites — the classic
+96x96 pixel art, which is both the iconic look and small enough to commit: the
+whole dex is about 2 MB, against ~130 MB for the 512x512 HOME renders.
 
-    python3 tools/fetch_sprites.py [--out DIR] [--workers N] [--limit N]
+The URLs come out of the API cache written by fetch_pokeapi.py where possible,
+so the two stay in step; otherwise they are constructed from the dex number.
+
+    python3 tools/fetch_sprites.py [--out assets/pokemon] [--workers N]
 """
 
 from __future__ import annotations
 
 import argparse
+import json
 import os
 import sys
 import threading
@@ -26,69 +29,88 @@ UA = "claude-code-sts-pokemon-import/1.0 (github.com/local; contact: repo owner)
 
 _lock = threading.Lock()
 _done = 0
-_failed: list[int] = []
+_missing: list = []
 
 
-def fetch_one(out_dir: str, dex: int, attempts: int = 4) -> bool:
+def sprite_url(cache: str, dex: int) -> str:
+    """Prefer the URL the API itself gave us; fall back to the canonical path."""
+    path = os.path.join(cache, "pokemon", f"{dex}.json")
+    if os.path.exists(path):
+        try:
+            with open(path, "r", encoding="utf-8") as fh:
+                url = (json.load(fh).get("sprites") or {}).get("front_default")
+            if url:
+                return url
+        except (json.JSONDecodeError, OSError):
+            pass
+    return f"{BASE}/{dex}.png"
+
+
+def grab(cache: str, out_dir: str, dex: int, attempts: int = 4) -> None:
     global _done
-    path = os.path.join(out_dir, f"{dex}.png")
-    if os.path.exists(path) and os.path.getsize(path) > 0:
+    dest = os.path.join(out_dir, f"{dex}.png")
+    if os.path.exists(dest) and os.path.getsize(dest) > 0:
         with _lock:
             _done += 1
-        return True
+        return
 
+    url = sprite_url(cache, dex)
     delay = 1.0
     for attempt in range(attempts):
         try:
-            req = urllib.request.Request(f"{BASE}/{dex}.png", headers={"User-Agent": UA})
-            with urllib.request.urlopen(req, timeout=45) as resp:
+            req = urllib.request.Request(url, headers={"User-Agent": UA})
+            with urllib.request.urlopen(req, timeout=60) as resp:
                 body = resp.read()
-            if not body:
-                raise ValueError("empty body")
-            tmp = path + ".part"
+            if not body.startswith(b"\x89PNG"):
+                raise ValueError("not a PNG")
+            tmp = dest + ".part"
             with open(tmp, "wb") as fh:
                 fh.write(body)
-            os.replace(tmp, path)
-            with _lock:
-                _done += 1
-                if _done % 100 == 0:
-                    print(f"  {_done} sprites", flush=True)
-            return True
+            os.replace(tmp, dest)
+            break
         except urllib.error.HTTPError as exc:
             if exc.code == 404:
+                with _lock:
+                    _missing.append(dex)
                 break
             if attempt == attempts - 1:
-                break
-        except Exception:
+                with _lock:
+                    _missing.append(dex)
+        except (urllib.error.URLError, TimeoutError, ValueError, OSError):
             if attempt == attempts - 1:
-                break
+                with _lock:
+                    _missing.append(dex)
         time.sleep(delay)
         delay *= 2
+
     with _lock:
-        _failed.append(dex)
-    return False
+        _done += 1
+        if _done % 100 == 0 or _done == MAX_DEX:
+            print(f"  {_done}/{MAX_DEX}", flush=True)
 
 
 def main() -> int:
     ap = argparse.ArgumentParser()
-    ap.add_argument("--out", default="assets/sprites/pokemon")
-    ap.add_argument("--workers", type=int, default=12)
+    ap.add_argument("--cache", default=".pokecache")
+    ap.add_argument("--out", default="assets/pokemon")
+    ap.add_argument("--workers", type=int, default=8)
     ap.add_argument("--limit", type=int, default=MAX_DEX)
     args = ap.parse_args()
 
     out_dir = os.path.abspath(args.out)
     os.makedirs(out_dir, exist_ok=True)
-    print(f"downloading {args.limit} sprites -> {out_dir}")
+    print(f"sprites -> {out_dir}")
 
     with ThreadPoolExecutor(max_workers=args.workers) as pool:
-        list(pool.map(lambda d: fetch_one(out_dir, d), range(1, args.limit + 1)))
+        for dex in range(1, args.limit + 1):
+            pool.submit(grab, os.path.abspath(args.cache), out_dir, dex)
 
+    have = len([f for f in os.listdir(out_dir) if f.endswith(".png")])
     total = sum(os.path.getsize(os.path.join(out_dir, f))
                 for f in os.listdir(out_dir) if f.endswith(".png"))
-    print(f"done: {_done} sprites, {total / 1024:.0f} KiB")
-    if _failed:
-        print(f"missing {len(_failed)}: {sorted(_failed)[:20]}", file=sys.stderr)
-        return 1
+    print(f"done: {have} sprites, {total / 1024 / 1024:.1f} MiB")
+    if _missing:
+        print(f"missing {len(_missing)}: {sorted(_missing)[:20]}", file=sys.stderr)
     return 0
 
 

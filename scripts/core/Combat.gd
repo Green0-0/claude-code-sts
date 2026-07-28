@@ -12,6 +12,10 @@ signal enemy_died(who: Actor)
 signal player_turn_started
 signal combat_finished(victory: bool)
 signal card_flew(card: Card, from_pile: String, to_pile: String)
+## A card or enemy move is being executed. Purely so the UI can animate it —
+## nothing waits on it, and combat resolves whether or not anyone is listening.
+## Payload: {source, target, card, name, effects, card_target}.
+signal move_cast(info: Dictionary)
 
 const HAND_LIMIT := 10
 
@@ -395,18 +399,6 @@ func end_turn() -> void:
 		return
 
 
-## The enemy whose turn step_enemy() will take next, or null when the phase is
-## spent. The UI reads this to telegraph the move before resolving it.
-func next_enemy_to_act() -> Actor:
-	var i := _enemy_index
-	while i < _enemy_order.size():
-		var e: Actor = _enemy_order[i]
-		if e.alive and not e.is_dead():
-			return e
-		i += 1
-	return null
-
-
 ## Advance the enemy phase by one action. Returns true while work remains.
 func step_enemy() -> bool:
 	if finished:
@@ -472,6 +464,9 @@ func _take_enemy_turn(e: Actor) -> void:
 	var move: Dictionary = moves.get(move_name, {"effects": []})
 	_say("%s uses %s." % [e.name, move_name])
 	e.move_history.append(move_name)
+	move_cast.emit({"source": e, "target": player, "card": null,
+			"name": move_name, "effects": move.get("effects", []),
+			"card_target": ""})
 	var ctx := {"owner": e, "target": player, "params": {}, "source_card": null}
 	_push_effects(move.get("effects", []), ctx)
 	_run_queue()
@@ -585,6 +580,10 @@ func play_card(c: Card, target_index: int = -1) -> bool:
 		_on_exhaust(c)
 		_after_card_played(c, target)
 		return true
+
+	move_cast.emit({"source": player, "target": target, "card": c,
+			"name": c.display_name(), "effects": c.effects(),
+			"card_target": c.effective_target_kind()})
 
 	var params := _params_for_play(c)
 	var ctx := {"owner": player, "target": target, "params": params,

@@ -17,11 +17,13 @@ const CLICK_SLOP := 12.0
 ## meant to sit above the hand must clear HAND_Z_DRAG — see Main.OVERLAY_Z.
 const HAND_Z_HOVER := 400
 const HAND_Z_DRAG := 500
+## Cast animations fly out of the hand, so they have to clear even a dragged
+## card. Still well under Main.OVERLAY_Z, so a prompt covers them.
+const CAST_Z := 700
 
 @onready var enemy_area: Control = $EnemyArea
 @onready var hand_area: Control = $HandArea
 @onready var player_panel: Panel = $PlayerPanel
-@onready var player_sprite: TextureRect = $PlayerPanel/Sprite
 @onready var player_name: Label = $PlayerPanel/NameLabel
 @onready var player_hp_bar: ProgressBar = $PlayerPanel/HpBar
 @onready var player_hp_label: Label = $PlayerPanel/HpBar/HpLabel
@@ -47,6 +49,8 @@ var _drag_origin: Vector2 = Vector2.ZERO
 var _drag_active: bool = false
 var _hovered_enemy: EnemyView = null
 var _enemy_timer: Timer = null
+var cast_fx: CastFx = null
+var player_sprite: PokeSprite = null
 var _busy: bool = false
 var _log_lines: Array = []
 
@@ -62,6 +66,13 @@ func _ready() -> void:
 	add_child(_enemy_timer)
 	target_line.visible = false
 	set_process_input(true)
+	# Casts play above the hand fan but below the modal picker — see the z-index
+	# budget at the top of this file and Main.OVERLAY_Z.
+	cast_fx = CastFx.new()
+	cast_fx.name = "CastFx"
+	cast_fx.set_anchors_preset(Control.PRESET_FULL_RECT)
+	cast_fx.z_index = CAST_Z
+	add_child(cast_fx)
 	$EnergyOrb.add_theme_stylebox_override("panel", UiTheme.orb_style())
 	player_panel.add_theme_stylebox_override("panel", UiTheme.player_style())
 	UiTheme.style_hp_bar(player_hp_bar)
@@ -78,13 +89,11 @@ func begin(enemy_ids: Array, room_type: String) -> void:
 	combat.combat_finished.connect(_on_combat_finished)
 	combat.enemy_died.connect(_on_enemy_died)
 	combat.player_turn_started.connect(_on_player_turn_started)
+	combat.move_cast.connect(_on_move_cast)
 	_log_lines.clear()
 	combat_log.clear()
 	combat.setup(enemy_ids, room_type, Run.rng)
-	# The player stands on the left of the board, so its sprite is mirrored to
-	# face the enemies across from it.
-	SpriteCache.dress(player_sprite, SpriteCache.texture_for_actor(combat.player),
-			SpriteCache.flip_for_player(combat.player))
+	_setup_player_sprite()
 	_build_enemy_views()
 	_rebuild_hand()
 	_refresh_all()
@@ -104,6 +113,8 @@ func _clear() -> void:
 	combat = null
 	target_line.visible = false
 	_hovered_enemy = null
+	if cast_fx != null and is_instance_valid(cast_fx):
+		cast_fx.clear_all()
 	# Otherwise the last fight's targeting line ("… It's super effective!") is
 	# still on screen when the next one starts.
 	prompt_label.visible = false
@@ -413,73 +424,117 @@ func _try_play(view: CardView, target_index: int) -> void:
 	if selected_view == view:
 		selected_view = null
 	view.set_selected(false)
-	_clear_target_highlight()
-	await _execute(view, target_index)
-
-
-## Plays the card's execution animation, then resolves it. The card is taken out
-## of the hand for the duration so the fan does not re-lay-out around a card that
-## is mid-flight, and input is blocked so a second card cannot be thrown into
-## the middle of the first one's animation.
-func _execute(view: CardView, target_index: int) -> void:
-	var card := view.card
-	var hostile := _is_hostile(card)
-	var kind := CardFx.kind_for(card, hostile)
-	var target_rect := _target_rect(card, target_index, hostile)
-	var from := Rect2(view.global_position, CardView.CARD_SIZE)
-
-	if not CardFx.is_enabled():
-		combat.play_card(card, target_index)
-		return
-
-	_busy = true
-	view.visible = false
-	var fx := CardFx.new()
-	add_child(fx)
-	await fx.execute(card, combat, from, target_rect, kind)
-	fx.queue_free()
-	_busy = false
-
-	if combat == null or combat.finished:
-		return
 	if target_index >= 0 and target_index < enemy_views.size():
 		for v in enemy_views:
 			if v.index == target_index:
 				v.flash()
-	combat.play_card(card, target_index)
+	combat.play_card(view.card, target_index)
+	_clear_target_highlight()
 
 
-## Where the card is being delivered. Attacks and hostile status cards land on
-## the enemy; anything that only helps you lands on you.
-func _target_rect(card: Card, target_index: int, hostile: bool) -> Rect2:
-	if card.type() != "attack" and not hostile:
-		return Rect2(player_panel.global_position, player_panel.size)
+# ═══════════════════════════════ Player sprite ═══════════════════════════════
+## Stands the player's Pokemon in its own panel, mirrored so it faces the enemy
+## line on the right — the arrangement the games use.
+##
+## The panel is laid out for a name and three rows of stats across its full
+## width, so making room means re-flowing it into two columns. That only happens
+## for a Pokemon run: an Ironclad has no sprite and keeps the original layout
+## exactly as the scene defines it.
+func _setup_player_sprite() -> void:
+	var mon := Run.player_mon()
+	if mon.is_empty():
+		return
+	var dex := int(mon.get("id", 0))
+	if dex <= 0 or not PokeSprite.exists_for(dex):
+		return
+
+	if player_sprite == null:
+		player_sprite = PokeSprite.new()
+		player_sprite.name = "PlayerSprite"
+		player_sprite.shadow_colour = Color(0, 0, 0, 0.32)
+		player_panel.add_child(player_sprite)
+		player_panel.move_child(player_sprite, 0)
+	player_sprite.position = Vector2(6, 26)
+	player_sprite.size = Vector2(124, 132)
+	player_sprite.show_pokemon(dex, true)
+
+	# Stats move over to the right of the sprite.
+	var left := 132.0
+	var right := player_panel.size.x - 12.0
+	_place(player_name, left, 10.0, right, 42.0)
+	_place(player_hp_bar, left + 4.0, 48.0, right - 4.0, 76.0)
+	_place(player_block, left + 4.0, 82.0, right - 4.0, 108.0)
+	_place(player_status_box, left, 112.0, right, 172.0)
+
+
+func _place(node: Control, l: float, t: float, r: float, b: float) -> void:
+	node.set_anchors_preset(Control.PRESET_TOP_LEFT)
+	node.position = Vector2(l, t)
+	node.size = Vector2(r - l, b - t)
+
+
+# ══════════════════════════════ Cast animations ══════════════════════════════
+## Turns "this card is being played" into one of CastFx's three routines. The
+## engine says what happened; everything about how it looks is decided here.
+func _on_move_cast(info: Dictionary) -> void:
+	if cast_fx == null or not is_instance_valid(cast_fx):
+		return
+	var source: Actor = info.get("source", null)
+	var target: Actor = info.get("target", null)
+	var card: Card = info.get("card", null)
+	var effects: Array = info.get("effects", [])
+	if source == null:
+		return
+
+	var on_self := CastFx.targets_self(effects, String(info.get("card_target", "")))
+	var kind := CastFx.classify(effects, source.is_player, on_self)
+
+	# Who it lands on: itself, the player, or one of the enemy row.
+	var landed_on: Actor = source if on_self else target
+	var view := _view_for(landed_on)
+	if view == null:
+		return
+
+	var global_rect: Rect2 = view.impact_rect() if view.has_method("impact_rect") \
+			else view.get_global_rect()
+	var inv := cast_fx.get_global_transform().affine_inverse()
+	var rect := Rect2(inv * global_rect.position, global_rect.size)
+	var from := _cast_origin(source)
+	cast_fx.play(kind, String(info.get("name", "")), _cast_colour(card, source, effects),
+			from, rect, view)
+
+
+## The on-screen thing representing an actor: its enemy card, or the player panel.
+func _view_for(who: Actor) -> Control:
+	if who == null:
+		return null
+	if who.is_player:
+		return player_panel
 	for v in enemy_views:
-		if v.index == target_index and v.actor.alive:
-			return v.card_rect()
-	# Cards that hit everything, or whose target has already died, aim at
-	# whatever is still standing.
-	for v in enemy_views:
-		if v.actor.alive and not v.actor.is_dead():
-			return v.card_rect()
-	return Rect2(player_panel.global_position, player_panel.size)
+		if v.actor == who and v.visible:
+			return v
+	return null
 
 
-## True when a non-attack card exists to do something unpleasant to the enemy —
-## the difference between the blessing animation and the cursed-mirror one.
-func _is_hostile(card: Card) -> bool:
-	if card.type() == "attack":
-		return false
-	for eff in card.effects():
-		var op := String(eff.get("op", ""))
-		var to := String(eff.get("target", ""))
-		if op in ["poke_damage", "damage", "damage_random", "poison_random"]:
-			return true
-		if op in ["poke_status", "status", "status_all_allies"] and to != "self":
-			return true
-		if op == "poke_stage" and to != "self":
-			return true
-	return false
+## Casts rise out of the hand for the player, and out of the caster for enemies.
+func _cast_origin(source: Actor) -> Vector2:
+	var inv := cast_fx.get_global_transform().affine_inverse()
+	if source.is_player:
+		var hand_rect := hand_area.get_global_rect()
+		return inv * Vector2(hand_rect.get_center().x, hand_rect.position.y + 40.0)
+	var view := _view_for(source)
+	if view != null:
+		return inv * view.get_global_rect().get_center()
+	return inv * get_global_rect().get_center()
+
+
+func _cast_colour(card: Card, source: Actor, effects: Array) -> Color:
+	if card != null:
+		return card.tint()
+	# An enemy move borrows its Pokemon's type colour, or the Spire's intent hue.
+	if source.is_pokemon() and not source.poke_types.is_empty():
+		return PokeData.type_color(String(source.poke_types[0]))
+	return EnemyLibrary.intent_color(String(source.intent.get("kind", "attack")))
 
 
 func _on_end_turn() -> void:
@@ -506,11 +561,6 @@ func _advance_enemy_phase() -> void:
 		_busy = false
 		end_turn_button.disabled = false
 		return
-	await _telegraph_enemy_move()
-	if combat == null or combat.finished:
-		_busy = false
-		end_turn_button.disabled = true
-		return
 	var more := combat.step_enemy()
 	_refresh_all()
 	if more:
@@ -518,65 +568,6 @@ func _advance_enemy_phase() -> void:
 	else:
 		_busy = false
 		end_turn_button.disabled = combat.finished
-
-
-## The enemy's move gets the same execution animation the player's cards do.
-## Enemies have no cards, so one is built from the move they have telegraphed,
-## and it is aimed at the player rather than across the board.
-func _telegraph_enemy_move() -> void:
-	if not CardFx.is_enabled() or combat == null:
-		return
-	var actor := combat.next_enemy_to_act()
-	if actor == null or actor.intent.is_empty():
-		return
-	var card := _card_for_intent(actor)
-	if card == null:
-		return
-	var view := _view_for(actor)
-	if view == null:
-		return
-	var hostile := _intent_is_hostile(actor)
-	var from := Rect2(view.global_position
-			+ Vector2(0, EnemyView.VIEW_SIZE.y * 0.35), CardView.CARD_SIZE)
-	# A move the enemy uses on itself lands on the enemy, not across the board.
-	var target: Rect2 = Rect2(player_panel.global_position, player_panel.size) \
-			if hostile else view.card_rect()
-	var kind := CardFx.kind_for(card, hostile)
-
-	var fx := CardFx.new()
-	add_child(fx)
-	await fx.execute(card, combat, from, target, kind)
-	fx.queue_free()
-
-
-## The view showing this enemy, or null if it has none — a minion that has
-## already been cleared away, say. Callers skip the animation rather than
-## animating from nowhere.
-func _view_for(a: Actor) -> EnemyView:
-	for v in enemy_views:
-		if v.actor == a:
-			return v
-	return null
-
-
-## A stand-in card carrying the enemy move's name and what it does, so the
-## animation has a face to show. Pokemon moves already exist as cards; anything
-## else falls back to a plain attack or skill.
-func _card_for_intent(a: Actor) -> Card:
-	var move_name := String(a.intent.get("name", ""))
-	if move_name == "":
-		return null
-	var id := PokeMoves.card_id(move_name.to_lower().replace(" ", "-"))
-	if CardLibrary.has(id):
-		return Card.create(id)
-	return Card.create("strike" if _intent_is_hostile(a) else "defend")
-
-
-func _intent_is_hostile(a: Actor) -> bool:
-	# An enemy buffing or healing itself is the friendly case; everything else
-	# it does is aimed at the player.
-	var kind := String(a.intent.get("kind", ""))
-	return not (kind in ["buff", "defend"])
 
 
 func _on_player_turn_started() -> void:
