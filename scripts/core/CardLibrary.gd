@@ -1038,15 +1038,39 @@ static var CARDS := {
 
 
 static func has(id: String) -> bool:
+	if PokeMoves.is_move_card(id):
+		return not PokeMoves.get_def(id).is_empty()
 	return CARDS.has(id)
 
 
 static func get_def(id: String) -> Dictionary:
+	if PokeMoves.is_move_card(id):
+		var d := PokeMoves.get_def(id)
+		if not d.is_empty():
+			return d
 	return CARDS.get(id, CARDS["strike"])
 
 
+## Character definition, covering both the Spire's two and every Pokemon.
+static func character(id: String) -> Dictionary:
+	if PokeCharacters.is_pokemon_character(id):
+		return PokeCharacters.get_def(id)
+	return CHARACTERS.get(id, CHARACTERS["ironclad"])
+
+
+static func starter_deck(id: String) -> Array:
+	if PokeCharacters.is_pokemon_character(id):
+		return PokeCharacters.starter_deck(id)
+	return (STARTER_DECKS.get(id, STARTER_DECKS["ironclad"]) as Array).duplicate()
+
+
 ## All cards obtainable as rewards for a given character colour.
+##
+## A Pokemon draws only from its own learnset, so the pool depends on who is
+## running rather than on the colour alone.
 static func pool_for(color: String, rarity: String = "") -> Array:
+	if color == PokeCharacters.COLOR:
+		return PokeCharacters.reward_pool(Run.character, rarity)
 	var out: Array = []
 	for id in CARDS:
 		var c: Dictionary = CARDS[id]
@@ -1085,6 +1109,7 @@ static func curse_pool() -> Array:
 
 static func color_tint(color: String) -> Color:
 	match color:
+		"pokemon": return Color(0.20, 0.36, 0.52)
 		"red": return Color(0.62, 0.19, 0.18)
 		"green": return Color(0.16, 0.44, 0.24)
 		"colorless": return Color(0.35, 0.38, 0.45)

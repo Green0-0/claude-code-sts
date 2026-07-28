@@ -53,13 +53,14 @@ var _resolving: bool = false
 var _enemy_order: Array = []
 var _enemy_index: int = 0
 var _temp_thorns: int = 0
+var _preempting: bool = false      ## inside the faster side's opening attack
 
 
 # ══════════════════════════════════ Setup ════════════════════════════════════
 func setup(enemy_ids: Array, node_type: String, run_rng: RandomNumberGenerator) -> void:
 	room_type = node_type
 	rng = run_rng
-	player = Actor.make_player(String(CardLibrary.CHARACTERS[Run.character]["name"]),
+	player = Actor.make_player(String(CardLibrary.character(Run.character)["name"]),
 			Run.hp, Run.max_hp)
 	var slot := 0
 	for id in enemy_ids:
@@ -75,11 +76,96 @@ func setup(enemy_ids: Array, node_type: String, run_rng: RandomNumberGenerator) 
 		inst.in_combat_upgrade = false
 		draw_pile.append(inst)
 	_shuffle(draw_pile)
+	_apply_poke_player_stats()
 	_apply_combat_start_relics()
 	for e in enemies:
 		_pick_intent(e)
 	phase = "player"
+	_preemptive_strike()
+	if finished:
+		return
 	_start_player_turn()
+
+
+## A player Pokemon fights with its own species' numbers: base stats and types
+## for the damage formula, and Speed for how much it gets done each turn.
+func _apply_poke_player_stats() -> void:
+	var mon := Run.player_mon()
+	if mon.is_empty():
+		return
+	player.poke_name = String(mon["name"])
+	player.poke_stats = mon["stats"]
+	player.poke_types = mon["types"]
+	player.stat_scale = PokeBalance.trainer_scale(mon)
+	energy_per_turn = PokeBalance.energy_for(mon)
+	base_draw = PokeBalance.draw_for(mon)
+
+
+## The fastest thing in the room gets the jump on you and attacks before your
+## first turn. This is what Speed buys an enemy.
+##
+## Only the single fastest one acts, and it cannot take you below 1 HP: a pack
+## of three quick Deerling would otherwise end the fight before you drew a hand,
+## which is not a fight. You always get your first turn.
+func _preemptive_strike() -> void:
+	if player == null or not player.is_pokemon():
+		return
+	var fastest: Actor = null
+	for e in living_enemies():
+		if not e.is_pokemon() or effective_speed(e) <= effective_speed(player):
+			continue
+		if fastest == null or effective_speed(e) > effective_speed(fastest):
+			fastest = e
+	if fastest == null:
+		return
+	_say("%s is faster — it strikes first!" % fastest.name)
+	_preempting = true
+	_take_enemy_turn(fastest)
+	_preempting = false
+	_check_deaths()
+	if _check_end():
+		return
+	_pick_intent(fastest)
+
+
+## The lowest HP a hit may leave this actor on. Only ever 1, and only for the
+## player during the pre-emptive strike.
+func _hp_floor(who: Actor) -> int:
+	return 1 if _preempting and who != null and who.is_player else 0
+
+
+## Whether anything in hand can put a dent in anything still standing. False
+## only when every card is blocked by a type immunity — a hand of Normal moves
+## facing a Ghost.
+func _hand_can_damage() -> bool:
+	var live := living_enemies()
+	if live.is_empty():
+		return true
+	for c in hand:
+		# A Spire card has no type to be stopped by.
+		if not c.is_pokemon_card():
+			return true
+		for eff in c.effects():
+			if String(eff.get("op", "")) != "poke_damage":
+				continue
+			var mtype := String(eff.get("mtype", "normal"))
+			for e in live:
+				if e.poke_types.is_empty():
+					return true
+				if PokeData.effectiveness(mtype, e.poke_types) > 0.0:
+					return true
+	return false
+
+
+func _grant_struggle() -> void:
+	var id := PokeMoves.card_id("struggle")
+	if not CardLibrary.has(id):
+		return
+	for c in hand:
+		if c.id == id:
+			return
+	_put_in_hand(Card.create(id))
+	_say("%s has no move that will land — it resorts to Struggle." % player.name)
 
 
 func _apply_combat_start_relics() -> void:
@@ -187,6 +273,19 @@ func _start_player_turn() -> void:
 		pass  # consumed in damage calculation, cleared at end of turn
 
 	_tick_poison(player)
+	_tick_poke_ailments(player)
+	if _check_end():
+		return
+
+	# Sleep, Freeze and the rest cost the player the turn outright; Disable just
+	# taxes it. Energy is already set above, so this is the last word on it.
+	var stopped := incapacitated_reason(player)
+	if stopped != "":
+		energy = 0
+		_say(stopped)
+	elif player.has_status("disable"):
+		energy = max(0, energy - 1)
+		_say("%s is disabled — 1 less Energy." % player.name)
 	if _check_end():
 		return
 
@@ -195,6 +294,12 @@ func _start_player_turn() -> void:
 	if turn == 1:
 		to_draw += first_turn_extra_draw()
 	_draw(to_draw)
+
+	# A Normal-only deck against a Ghost has no way to win, and unlike the games
+	# there is nothing to switch to. Struggle is the series' own answer to
+	# having no move that will land, so it is the answer here.
+	if Run.is_pokemon_run() and not _hand_can_damage():
+		_grant_struggle()
 
 	if player.has_status("brutality"):
 		var n: int = player.get_status("brutality")
@@ -274,11 +379,16 @@ func end_turn() -> void:
 	if _check_end():
 		return
 
-	# Enemy phase
+	# Enemy phase. Pokemon act in Speed order. The Spire's own cast has no Speed
+	# to sort by, and sort_custom is not stable, so leave their left-to-right
+	# order exactly as it was.
 	_enemy_order = living_enemies()
+	if Run.is_pokemon_run():
+		_enemy_order.sort_custom(func(a, b): return effective_speed(a) > effective_speed(b))
 	_enemy_index = 0
 	for e in _enemy_order:
 		_tick_poison(e)
+		_tick_poke_ailments(e)
 	_check_deaths()
 	changed.emit()
 	if _check_end():
@@ -338,6 +448,10 @@ func _finish_enemy_phase() -> void:
 func _take_enemy_turn(e: Actor) -> void:
 	# An enemy's Block expires at the start of its own turn.
 	e.block = 0
+	var stopped := incapacitated_reason(e)
+	if stopped != "":
+		_say(stopped)
+		return
 	var move_name: String = String(e.intent.get("name", ""))
 	if move_name == "":
 		_pick_intent(e)
@@ -368,6 +482,11 @@ func intent_damage(e: Actor) -> Array:
 		return [0, 0]
 	for eff in e.intent.get("effects", []):
 		var op := String(eff.get("op", ""))
+		if op == "poke_damage":
+			var hits: int = max(1, int(eff.get("min_hits", 1)))
+			return [calc_poke_damage(int(eff.get("power", 0)),
+					String(eff.get("class", "physical")),
+					String(eff.get("mtype", "normal")), e, player, 1.0), hits]
 		if op == "damage":
 			var base := _resolve_amount(eff, "amount", {"owner": e, "params": {}})
 			var times := _resolve_amount(eff, "times", {"owner": e, "params": {}})
@@ -914,8 +1033,385 @@ func _apply_effect(eff: Dictionary, ctx: Dictionary) -> void:
 			_say("%s rises again!" % owner.name)
 		"special":
 			_special(String(eff.get("id", "")), ctx)
+
+		# ────────────────────────────── Pokemon ──────────────────────────────
+		"poke_damage":
+			_op_poke_damage(eff, ctx, owner, card)
+		"poke_status":
+			var psid := String(eff.get("id", "burn"))
+			var pstacks: int = max(1, _resolve_amount(eff, "stacks", ctx))
+			for t in _targets_for(eff, ctx):
+				if not _roll_chance(eff, ctx, owner, t):
+					continue
+				_apply_status(t, psid, pstacks, owner)
+		"poke_stage":
+			var stat := String(eff.get("stat", "atk"))
+			var change := int(eff.get("change", 0))
+			for t in _targets_for(eff, ctx):
+				if not _roll_chance(eff, ctx, owner, t):
+					continue
+				_apply_stage(t, stat, change, owner)
+		"poke_heal":
+			var pct := _resolve_amount(eff, "percent", ctx)
+			for t in _targets_for(eff, ctx):
+				_heal(t, int(round(t.max_hp * pct / 100.0)))
+		"poke_recoil_self":
+			var pct2 := _resolve_amount(eff, "percent", ctx)
+			_lose_hp(owner, int(round(owner.max_hp * pct2 / 100.0)),
+					card.display_name() if card != null else "Recoil")
+
 		_:
 			push_warning("Unknown effect op: %s" % op)
+
+
+# ═══════════════════════════════ Pokemon rules ═══════════════════════════════
+## Damage for one Pokemon move. The main-series formula does the heavy lifting
+## (power against the attacker's offensive stat and the defender's matching
+## defensive stat); type effectiveness, STAB, stat stages, burn and criticals
+## are layered on top, and the result is then run through the Spire's own
+## modifiers so Strength, Weak and Vulnerable still mean something.
+func calc_poke_damage(power: int, damage_class: String, move_type: String,
+		source: Actor, target: Actor, extra: float = 1.0) -> int:
+	if power <= 0:
+		return 0
+	var atk_key := "spa" if damage_class == "special" else "atk"
+	var def_key := "spd" if damage_class == "special" else "df"
+
+	var attack := float(PokeBalance.NEUTRAL_DEFENSE)
+	var user_types: Array = []
+	if source != null:
+		attack = float(source.base_stat(atk_key, 60)) * source.stat_scale
+		attack *= PokeBalance.stage_multiplier(source.stage(atk_key))
+		user_types = source.poke_types
+		# A burned attacker hits half as hard with physical moves.
+		if damage_class == "physical" and source.has_status("burn"):
+			extra *= 0.5
+
+	var defense := float(PokeBalance.NEUTRAL_DEFENSE)
+	var target_types: Array = []
+	if target != null:
+		defense = float(target.base_stat(def_key, 60)) * target.stat_scale
+		defense *= PokeBalance.stage_multiplier(target.stage(def_key))
+		target_types = target.poke_types
+
+	var type_mult := 1.0
+	if not target_types.is_empty():
+		type_mult = PokeData.effectiveness(move_type, target_types)
+		# Foresight and friends strip an immunity but not a resistance.
+		if type_mult <= 0.0 and target.has_status("identified"):
+			type_mult = 1.0
+	var stab := PokeData.stab_bonus(move_type, user_types)
+
+	var dmg := PokeBalance.move_damage(power, int(attack), int(defense),
+			type_mult, stab, extra)
+	if dmg <= 0:
+		return 0
+	# Hand off to the Spire layer for Strength, Weak, Vulnerable and Flight.
+	return calc_attack_damage(dmg, source, target, null, 1)
+
+
+func _op_poke_damage(eff: Dictionary, ctx: Dictionary, owner: Actor, card: Card) -> void:
+	var power := _resolve_amount(eff, "power", ctx)
+	var damage_class := String(eff.get("class", "physical"))
+	var move_type := String(eff.get("mtype", "normal"))
+	var accuracy := int(eff.get("acc", 0))
+
+	var hits := 1
+	if int(eff.get("max_hits", 0)) > 1:
+		hits = rng.randi_range(int(eff.get("min_hits", 2)), int(eff.get("max_hits", 2)))
+
+	var total_dealt := 0
+	for i in range(hits):
+		var targets := _targets_for(eff, ctx)
+		if targets.is_empty():
+			break
+		for t in targets:
+			if not _accuracy_check(owner, t, accuracy, card):
+				continue
+			var extra := 1.0
+			if _crit_roll(int(eff.get("crit", 0))):
+				extra *= 1.5
+				_say("A critical hit!")
+			# Seismic Toss and friends set the number outright; Low Kick and
+			# friends compute a power first and then use the normal formula.
+			var dmg := 0
+			if eff.has("fixed"):
+				dmg = _fixed_damage(String(eff["fixed"]), move_type, owner, t)
+			else:
+				var pw := power
+				if eff.has("formula"):
+					pw = _variable_power(String(eff["formula"]), owner, t)
+				dmg = calc_poke_damage(pw, damage_class, move_type, owner, t, extra)
+			if dmg <= 0:
+				_say("It has no effect on %s." % t.name)
+				continue
+			# Counter and Mirror Coat need to know what hit them last.
+			t.last_hit_class = damage_class
+			if bool(ctx.get("double_damage", false)):
+				dmg *= 2
+			if i == 0:
+				_announce_matchup(move_type, t)
+			var unblocked := _damage(t, dmg, owner, "attack", card)
+			t.last_hit_taken = unblocked
+			total_dealt += unblocked
+			if String(eff.get("fixed", "")) == "user_hp":
+				_lose_hp(owner, owner.hp, "Final Gambit")
+		_check_deaths()
+
+	var drain := int(eff.get("drain", 0))
+	if drain > 0 and total_dealt > 0:
+		_heal(owner, max(1, int(round(total_dealt * drain / 100.0))))
+	var recoil := int(eff.get("recoil", 0))
+	if recoil > 0 and total_dealt > 0:
+		_lose_hp(owner, max(1, int(round(total_dealt * recoil / 100.0))), "Recoil")
+
+
+## Moves that name their own damage. Type immunity still applies, so Night Shade
+## cannot touch a Normal type.
+func _fixed_damage(kind: String, move_type: String, source: Actor, target: Actor) -> int:
+	if target == null:
+		return 0
+	if not target.poke_types.is_empty() \
+			and PokeData.effectiveness(move_type, target.poke_types) <= 0.0 \
+			and not target.has_status("identified"):
+		return 0
+	match kind:
+		"flat_40":
+			return 40
+		"flat_20":
+			return 20
+		"user_level":
+			return PokeBalance.LEVEL
+		"psywave":
+			return max(1, int(round(PokeBalance.LEVEL * rng.randf_range(0.5, 1.5))))
+		"half_target_hp":
+			return max(1, int(floor(target.hp / 2.0)))
+		"match_user_hp":
+			return max(0, target.hp - source.hp) if source != null else 0
+		"user_hp":
+			return source.hp if source != null else 0
+		"ohko":
+			# The accuracy roll has already happened, so landing it is the KO.
+			_say("It's a one-hit KO!")
+			return target.hp + target.block
+	return 0
+
+
+## Moves whose power depends on the state of the fight.
+func _variable_power(kind: String, source: Actor, target: Actor) -> int:
+	var src_mon := PokeData.mon(source.poke_name) if source != null else {}
+	var tgt_mon := PokeData.mon(target.poke_name) if target != null else {}
+	match kind:
+		"target_weight":
+			# Weight is in hectograms; the games' brackets top out at 120 power.
+			var w := float(tgt_mon.get("weight", 500))
+			if w >= 2000.0: return 120
+			if w >= 1000.0: return 100
+			if w >= 500.0: return 80
+			if w >= 250.0: return 60
+			if w >= 100.0: return 40
+			return 20
+		"weight_ratio":
+			var mine := maxf(1.0, float(src_mon.get("weight", 500)))
+			var theirs := maxf(1.0, float(tgt_mon.get("weight", 500)))
+			var ratio := mine / theirs
+			if ratio >= 5.0: return 120
+			if ratio >= 4.0: return 100
+			if ratio >= 3.0: return 80
+			if ratio >= 2.0: return 60
+			return 40
+		"speed_ratio":
+			var fast := float(maxi(1, effective_speed(source)))
+			var slow := float(maxi(1, effective_speed(target)))
+			var r := fast / slow
+			if r >= 4.0: return 150
+			if r >= 3.0: return 120
+			if r >= 2.0: return 80
+			if r >= 1.0: return 60
+			return 40
+		"inverse_speed":
+			var mine2 := float(maxi(1, effective_speed(source)))
+			var theirs2 := float(maxi(1, effective_speed(target)))
+			return clampi(int(25.0 * theirs2 / mine2), 1, 150)
+		"low_hp":
+			var left := source.hp_ratio() if source != null else 1.0
+			if left <= 0.05: return 200
+			if left <= 0.10: return 150
+			if left <= 0.20: return 100
+			if left <= 0.35: return 80
+			if left <= 0.68: return 40
+			return 20
+		"target_hp":
+			return clampi(int(round(120.0 * target.hp_ratio())), 1, 120) if target != null else 1
+		"friendship_high":
+			return 102
+		"friendship_low":
+			return 52
+		"target_stages":
+			var raised := 0
+			if target != null:
+				for stat in ["atk", "df", "spa", "spd", "spe"]:
+					raised += max(0, target.stage(stat))
+			return clampi(60 + 20 * raised, 60, 200)
+		"random_quake":
+			return [10, 30, 50, 70, 90, 110, 150][rng.randi_range(0, 6)]
+		"counter_physical", "counter_special", "counter_any":
+			if source == null or source.last_hit_taken <= 0:
+				return 0
+			var wanted := "physical" if kind == "counter_physical" else "special"
+			if kind != "counter_any" and source.last_hit_class != wanted:
+				return 0
+			# Returning damage directly would bypass the formula, so convert the
+			# hit back into a rough power figure.
+			var factor := 1.5 if kind == "counter_any" else 2.0
+			return clampi(int(source.last_hit_taken * factor * 2), 1, 250)
+	return 0
+
+
+func _announce_matchup(move_type: String, target: Actor) -> void:
+	if target == null or target.poke_types.is_empty():
+		return
+	var note := PokeData.effectiveness_text(
+			PokeData.effectiveness(move_type, target.poke_types))
+	if note != "":
+		_say(note)
+
+
+## Accuracy 0 means the move cannot miss (Swift, Aerial Ace). Everything else
+## rolls, including 100-accuracy moves — those can still be dodged by a target
+## that has raised its Evasion.
+func _accuracy_check(source: Actor, target: Actor, accuracy: int, card: Card) -> bool:
+	if accuracy <= 0:
+		return true
+	var chance := float(accuracy)
+	if source != null:
+		chance *= PokeBalance.stage_multiplier(source.stage("accuracy"))
+	if target != null:
+		chance /= PokeBalance.stage_multiplier(target.stage("evasion"))
+	if rng.randf() * 100.0 < chance:
+		return true
+	var what := card.display_name() if card != null else "The attack"
+	_say("%s missed %s!" % [what, target.name if target != null else "its target"])
+	floating.emit(target, "Miss", "blocked")
+	return false
+
+
+## A move's stated crit rate is a stage, not a percentage: 0 is 1/24, 1 is 1/8.
+func _crit_roll(crit_stage: int) -> bool:
+	var chance := 4.17
+	if crit_stage >= 3:
+		chance = 100.0
+	elif crit_stage == 2:
+		chance = 50.0
+	elif crit_stage == 1:
+		chance = 12.5
+	return rng.randf() * 100.0 < chance
+
+
+## Chance riders ("30% chance to burn") roll here. Absent means always.
+func _roll_chance(eff: Dictionary, ctx: Dictionary, source: Actor, target: Actor) -> bool:
+	if not eff.has("chance"):
+		return true
+	var chance := _resolve_amount(eff, "chance", ctx)
+	if chance >= 100:
+		return true
+	return rng.randf() * 100.0 < float(chance)
+
+
+func _apply_stage(target: Actor, stat: String, change: int, source: Actor) -> void:
+	if target == null or target.is_dead() or change == 0:
+		return
+	# Lowering a stat is a debuff, so Artifact can shrug it off.
+	if change < 0 and target.has_status("artifact"):
+		target.set_status("artifact", target.get_status("artifact") - 1)
+		_say("%s's Artifact absorbs the drop." % target.name)
+		return
+	var before := target.stage(stat)
+	var after := target.add_stage(stat, change)
+	if after == before:
+		_say("%s's %s won't go any %s." % [target.name, PokeMoves._stat_label(stat),
+				"higher" if change > 0 else "lower"])
+		return
+	floating.emit(target, "%s %+d" % [PokeMoves._stat_label(stat), change], "status")
+	changed.emit()
+
+
+## Speed after paralysis and Speed stages, which sets turn order.
+func effective_speed(who: Actor) -> int:
+	if who == null:
+		return 0
+	var spe := float(who.base_stat("spe", 60))
+	spe *= PokeBalance.stage_multiplier(who.stage("spe"))
+	if who.has_status("paralysis"):
+		spe *= 0.25
+	return int(spe)
+
+
+## Why this actor cannot act this turn, or "" if it can. Sleep and Freeze cost
+## the whole turn; Flinch costs the one action; Confusion and Infatuation are
+## rolled each time.
+func incapacitated_reason(who: Actor) -> String:
+	if who == null:
+		return ""
+	if who.has_status("sleep"):
+		return "%s is fast asleep." % who.name
+	if who.has_status("freeze"):
+		# 20% thaw check each turn, as in the games.
+		if rng.randf() < 0.2:
+			who.set_status("freeze", 0)
+			_say("%s thawed out!" % who.name)
+			return ""
+		return "%s is frozen solid." % who.name
+	if who.has_status("flinch"):
+		who.set_status("flinch", 0)
+		return "%s flinched." % who.name
+	if who.has_status("infatuation") and rng.randf() < 0.5:
+		return "%s is immobilised by love." % who.name
+	if who.has_status("confusion") and rng.randf() < 0.33:
+		var self_hit := PokeBalance.base_damage(40, who.base_stat("atk", 60),
+				who.base_stat("df", 60))
+		_damage(who, self_hit, who, "hp_loss", null)
+		return "%s hurt itself in its confusion." % who.name
+	return ""
+
+
+## Ailments that chip away each turn. Called alongside _tick_poison.
+func _tick_poke_ailments(who: Actor) -> void:
+	if who == null or who.is_dead() or not who.is_pokemon():
+		return
+	if who.has_status("burn"):
+		var burn_dmg: int = max(1, int(round(who.max_hp * 0.0625)))
+		_lose_hp(who, burn_dmg, "Burn")
+		who.set_status("burn", who.get_status("burn") - 1)
+	if who.has_status("trapped"):
+		var trap_dmg: int = max(1, int(round(who.max_hp * 0.125)))
+		_lose_hp(who, trap_dmg, "Trapped")
+		who.set_status("trapped", who.get_status("trapped") - 1)
+	if who.has_status("nightmare"):
+		if who.has_status("sleep"):
+			_lose_hp(who, max(1, int(round(who.max_hp * 0.25))), "Nightmare")
+		who.set_status("nightmare", who.get_status("nightmare") - 1)
+	if who.has_status("leech_seed"):
+		var drained: int = max(1, int(round(who.max_hp * 0.125)))
+		_lose_hp(who, drained, "Leech Seed")
+		# The seed feeds whoever is on the other side of the fight.
+		var beneficiary: Actor = player if not who.is_player else null
+		if who.is_player:
+			var live := living_enemies()
+			beneficiary = live[0] if live.size() > 0 else null
+		if beneficiary != null:
+			_heal(beneficiary, drained)
+		who.set_status("leech_seed", who.get_status("leech_seed") - 1)
+	if who.has_status("drowsy"):
+		var left: int = who.get_status("drowsy") - 1
+		who.set_status("drowsy", left)
+		if left <= 0:
+			_apply_status(who, "sleep", 2, null)
+			_say("%s fell asleep!" % who.name)
+	for id in ["sleep", "confusion", "paralysis", "infatuation", "heal_block",
+			"embargo", "disable", "identified"]:
+		if who.has_status(id):
+			who.set_status(id, who.get_status(id) - 1)
 
 
 # ══════════════════════════════ Unique card logic ════════════════════════════
@@ -1402,7 +1898,7 @@ func _damage(target: Actor, amount: int, source: Actor, kind: String, card: Card
 		if absorbed > 0:
 			floating.emit(target, "-%d" % absorbed, "blocked")
 	if remaining > 0:
-		target.hp = max(0, target.hp - remaining)
+		target.hp = max(_hp_floor(target), target.hp - remaining)
 		floating.emit(target, "-%d" % remaining, "damage")
 		if target.has_status("plated_armor"):
 			target.set_status("plated_armor", target.get_status("plated_armor") - 1)
@@ -1431,7 +1927,7 @@ func _damage(target: Actor, amount: int, source: Actor, kind: String, card: Card
 func _lose_hp(who: Actor, amount: int, reason: String) -> void:
 	if amount <= 0 or who == null or who.is_dead():
 		return
-	who.hp = max(0, who.hp - amount)
+	who.hp = max(_hp_floor(who), who.hp - amount)
 	floating.emit(who, "-%d" % amount, "damage")
 	if who.is_player:
 		if player.has_status("rupture") and reason != "Poison" and reason != "Burn":
@@ -1454,6 +1950,9 @@ func _on_player_hp_loss(amount: int, from_attack: bool) -> void:
 
 func _heal(who: Actor, amount: int) -> void:
 	if amount <= 0 or who == null:
+		return
+	if who.has_status("heal_block"):
+		_say("%s cannot be healed right now." % who.name)
 		return
 	var before := who.hp
 	who.hp = min(who.max_hp, who.hp + amount)
@@ -1588,6 +2087,9 @@ func _on_victory() -> void:
 # ═══════════════════════════════════ Potions ═════════════════════════════════
 func use_potion(slot: int, target_index: int = -1) -> bool:
 	if finished or phase != "player":
+		return false
+	if player.has_status("embargo"):
+		_say("Embargo seals your potions.")
 		return false
 	var id := String(Run.potions[slot]) if slot < Run.potions.size() else ""
 	if id == "":

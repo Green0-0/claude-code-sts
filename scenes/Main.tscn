@@ -10,6 +10,7 @@
 [ext_resource type="Script" path="res://scripts/ui/EventScreen.gd" id="8_event"]
 [ext_resource type="Script" path="res://scripts/ui/CardPicker.gd" id="9_picker"]
 [ext_resource type="Script" path="res://scripts/ui/TopBar.gd" id="10_topbar"]
+[ext_resource type="Script" path="res://scripts/ui/PokemonSelect.gd" id="11_pokesel"]
 
 [node name="Main" type="Node"]
 script = ExtResource("1_main")
@@ -91,6 +92,12 @@ custom_minimum_size = Vector2(210, 62)
 layout_mode = 2
 theme_override_font_sizes/font_size = 20
 text = "The Silent"
+
+[node name="PokemonButton" type="Button" parent="Screens/TitleScreen/Panel/Choices"]
+custom_minimum_size = Vector2(210, 62)
+layout_mode = 2
+theme_override_font_sizes/font_size = 20
+text = "Pokémon ▸"
 
 [node name="BlurbLabel" type="Label" parent="Screens/TitleScreen/Panel"]
 layout_mode = 0
@@ -897,6 +904,98 @@ custom_minimum_size = Vector2(160, 42)
 layout_mode = 2
 theme_override_font_sizes/font_size = 17
 text = "Cancel"
+
+[node name="PokemonSelect" type="Control" parent="."]
+visible = false
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+script = ExtResource("11_pokesel")
+
+[node name="Dim" type="ColorRect" parent="PokemonSelect"]
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+color = Color(0, 0, 0, 0.933333)
+
+[node name="Panel" type="Panel" parent="PokemonSelect"]
+layout_mode = 1
+anchor_right = 1.0
+anchor_bottom = 1.0
+offset_left = 60.0
+offset_top = 30.0
+offset_right = -60.0
+offset_bottom = -30.0
+grow_horizontal = 2
+grow_vertical = 2
+
+[node name="TitleLabel" type="Label" parent="PokemonSelect/Panel"]
+layout_mode = 1
+anchor_right = 1.0
+offset_top = 12.0
+offset_bottom = 46.0
+grow_horizontal = 2
+theme_override_colors/font_color = Color(0.945098, 0.827451, 0.4, 1)
+theme_override_font_sizes/font_size = 22
+text = "Choose your Pokémon"
+horizontal_alignment = 1
+vertical_alignment = 1
+
+[node name="SearchInput" type="LineEdit" parent="PokemonSelect/Panel"]
+layout_mode = 1
+anchor_left = 0.5
+anchor_right = 0.5
+offset_left = -230.0
+offset_top = 52.0
+offset_right = 230.0
+offset_bottom = 88.0
+grow_horizontal = 2
+placeholder_text = "name, type or dex number"
+
+[node name="HintLabel" type="Label" parent="PokemonSelect/Panel"]
+layout_mode = 1
+anchor_right = 1.0
+offset_top = 92.0
+offset_bottom = 114.0
+grow_horizontal = 2
+theme_override_colors/font_color = Color(0.72, 0.72, 0.78, 1)
+theme_override_font_sizes/font_size = 13
+horizontal_alignment = 1
+vertical_alignment = 1
+
+[node name="Scroll" type="ScrollContainer" parent="PokemonSelect/Panel"]
+layout_mode = 1
+anchor_right = 1.0
+anchor_bottom = 1.0
+offset_left = 18.0
+offset_top = 120.0
+offset_right = -18.0
+offset_bottom = -62.0
+grow_horizontal = 2
+grow_vertical = 2
+
+[node name="List" type="VBoxContainer" parent="PokemonSelect/Panel/Scroll"]
+layout_mode = 2
+size_flags_horizontal = 3
+theme_override_constants/separation = 3
+
+[node name="CloseButton" type="Button" parent="PokemonSelect/Panel"]
+custom_minimum_size = Vector2(160, 40)
+layout_mode = 1
+anchor_left = 0.5
+anchor_top = 1.0
+anchor_right = 0.5
+anchor_bottom = 1.0
+offset_left = -80.0
+offset_top = -52.0
+offset_right = 80.0
+offset_bottom = -12.0
+grow_horizontal = 2
+grow_vertical = 0
+theme_override_font_sizes/font_size = 16
+text = "Back"
 
 [node name="Toast" type="Label" parent="."]
 visible = false

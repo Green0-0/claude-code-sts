@@ -51,6 +51,11 @@ func _style() -> void:
 			tint = Color(0.46, 0.16, 0.30)
 		elif actor.is_minion:
 			tint = Color(0.30, 0.30, 0.34)
+		# A Pokemon wears its primary type, since that is what you have to plan
+		# around. Bosses keep a darker shade of it.
+		if actor.is_pokemon():
+			tint = PokeData.type_color(String(actor.poke_types[0])).darkened(
+					0.55 if actor.is_boss else 0.4)
 	var sb := StyleBoxFlat.new()
 	sb.bg_color = tint
 	sb.border_color = tint.lightened(0.25)
@@ -73,6 +78,11 @@ func refresh() -> void:
 		return
 	visible = actor.alive and not actor.is_dead()
 	name_label.text = actor.name
+	if actor.is_pokemon():
+		var types := ""
+		for t in actor.poke_types:
+			types += ("/" if types != "" else "") + PokeData.display_name(String(t))
+		name_label.text = "%s\n%s" % [actor.name, types]
 	hp_bar.max_value = max(1, actor.max_hp)
 	hp_bar.value = actor.hp
 	hp_label.text = "%d / %d" % [actor.hp, actor.max_hp]

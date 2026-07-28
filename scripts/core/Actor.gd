@@ -13,6 +13,17 @@ var statuses: Dictionary = {}      ## id -> stacks
 var rolled: Dictionary = {}        ## per-instance rolled values, referenced by "@key"
 var alive: bool = true
 
+## Pokemon-only. Empty for the Spire's own cast, and every Pokemon rule checks
+## for that: a Cultist has no types to be weak to and no Defense to soak with.
+var poke_name: String = ""
+var poke_stats: Dictionary = {}    ## hp/atk/df/spa/spd/spe base stats
+var poke_types: Array = []         ## e.g. ["water", "flying"]
+## Multiplier on this actor's offensive and defensive stats. Only ever above 1
+## for a player running a below-band species — see PokeBalance.trainer_scale.
+var stat_scale: float = 1.0
+var last_hit_taken: int = 0        ## unblocked damage from the last move that hit
+var last_hit_class: String = ""    ## "physical" / "special", for Counter et al
+
 ## Enemy-only
 var turn_count: int = 0
 var move_history: Array = []       ## names of past moves, most recent last
@@ -54,9 +65,39 @@ func add_status(id: String, stacks: int) -> void:
 	set_status(id, get_status(id) + stacks)
 
 
+func is_pokemon() -> bool:
+	return poke_name != ""
+
+
+## Base stat lookup with a sane default, so shared damage code can ask any actor.
+func base_stat(key: String, fallback: int = 50) -> int:
+	return int(poke_stats.get(key, fallback))
+
+
+## Stat stages live in the same status bag as everything else, prefixed so they
+## cannot collide with a Spire power, and are signed like Strength.
+func stage(stat: String) -> int:
+	return int(statuses.get("stage_" + stat, 0))
+
+
+func add_stage(stat: String, amount: int) -> int:
+	var key := "stage_" + stat
+	var next := clampi(stage(stat) + amount, -PokeBalance.MAX_STAGE, PokeBalance.MAX_STAGE)
+	if next == 0:
+		statuses.erase(key)
+	else:
+		statuses[key] = next
+	return next
+
+
 ## Strength can be negative, so it is stored separately from the >0 rule.
 func add_signed_status(id: String, stacks: int) -> void:
-	if id in ["strength", "dexterity"]:
+	if id.begins_with("stage_"):
+		statuses[id] = clampi(get_status(id) + stacks,
+				-PokeBalance.MAX_STAGE, PokeBalance.MAX_STAGE)
+		if statuses[id] == 0:
+			statuses.erase(id)
+	elif id in ["strength", "dexterity"]:
 		statuses[id] = get_status(id) + stacks
 		if statuses[id] == 0:
 			statuses.erase(id)

@@ -94,7 +94,13 @@ static func act_data(act: int) -> Dictionary:
 
 
 ## Picks an encounter, avoiding immediate repeats where possible.
+##
+## A Pokemon run draws from the whole dex instead, weighted by base stat total —
+## see PokeEncounters. The hand-written tables above are only used by the Spire's
+## own two characters.
 static func pick(act: int, kind: String, rng: RandomNumberGenerator, recent: Array) -> Array:
+	if Run.is_pokemon_run():
+		return PokeEncounters.pick(act, kind, rng, recent)
 	var pool: Array = act_data(act).get(kind, act_data(act)["weak"])
 	var candidates: Array = []
 	for e in pool:
@@ -108,5 +114,7 @@ static func pick(act: int, kind: String, rng: RandomNumberGenerator, recent: Arr
 
 
 static func boss_for(act: int, rng: RandomNumberGenerator) -> Array:
+	if Run.is_pokemon_run():
+		return PokeEncounters.boss_for(act, rng)
 	var bosses: Array = act_data(act)["boss"]
 	return (bosses[rng.randi_range(0, bosses.size() - 1)] as Array).duplicate()

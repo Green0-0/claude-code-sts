@@ -55,7 +55,7 @@ func start_run(char_id: String, run_seed: int = 0, asc: int = 0) -> void:
 	rng.seed = seed_value
 	ascension = asc
 
-	var cdef: Dictionary = CardLibrary.CHARACTERS[char_id]
+	var cdef: Dictionary = CardLibrary.character(char_id)
 	max_hp = int(cdef["max_hp"])
 	if ascension >= 1:
 		max_hp -= 5
@@ -78,7 +78,7 @@ func start_run(char_id: String, run_seed: int = 0, asc: int = 0) -> void:
 	card_uncommon_chance = 0.37
 	pending_boss_relic = false
 
-	for id in CardLibrary.STARTER_DECKS[char_id]:
+	for id in CardLibrary.starter_deck(char_id):
 		deck.append(Card.create(id))
 	add_relic(String(cdef["relic"]))
 	if ascension >= 10:
@@ -239,7 +239,20 @@ func remove_card(c: Card) -> void:
 
 
 func card_color() -> String:
-	return String(CardLibrary.CHARACTERS[character]["color"])
+	return String(CardLibrary.character(character)["color"])
+
+
+## True while the player is running a Pokemon, which switches the dungeon over
+## to Pokemon encounters and the Pokemon damage rules.
+func is_pokemon_run() -> bool:
+	return PokeCharacters.is_pokemon_character(character)
+
+
+## The species record behind the current run, or {} for Ironclad and Silent.
+func player_mon() -> Dictionary:
+	if not is_pokemon_run():
+		return {}
+	return PokeCharacters.mon_for(character)
 
 
 ## Rarity-weighted card ids for a combat reward.
@@ -248,7 +261,10 @@ func random_card_ids(count: int, allow_colorless: bool = true) -> Array:
 	var guard := 0
 	while out.size() < count and guard < 200:
 		guard += 1
-		var use_colorless := allow_colorless and rng.randf() < 0.05
+		# A Pokemon is offered its own moves and nothing else, so the Colorless
+		# pool is off the table for the whole run.
+		var use_colorless := allow_colorless and not is_pokemon_run() \
+				and rng.randf() < 0.05
 		var color := "colorless" if use_colorless else card_color()
 		var rarity := _roll_card_rarity()
 		var pool: Array = CardLibrary.colorless_pool(rarity) if use_colorless \
@@ -267,6 +283,15 @@ func random_card_ids(count: int, allow_colorless: bool = true) -> Array:
 			continue
 		out.append(pick)
 	return out
+
+
+## Rarity of a card for this run. The same move can be a cheap level-up move for
+## one species and an expensive tutor move for another, so a Pokemon run asks
+## its own learnset rather than the shared card definition.
+func card_rarity_of(id: String) -> String:
+	if is_pokemon_run() and PokeMoves.is_move_card(id):
+		return PokeCharacters.rarity_for(character, id)
+	return String(CardLibrary.get_def(id)["rarity"])
 
 
 func _roll_card_rarity() -> String:
@@ -363,9 +388,13 @@ func generate_shop() -> Dictionary:
 	picks.append_array(_take_random(attack_ids, 2))
 	picks.append_array(_take_random(skill_ids, 2))
 	picks.append_array(_take_random(power_ids, 1))
-	picks.append_array(_take_random(CardLibrary.colorless_pool(), 2))
+	# A Pokemon's shop stocks its own moves and nothing else.
+	if not is_pokemon_run():
+		picks.append_array(_take_random(CardLibrary.colorless_pool(), 2))
+	else:
+		picks.append_array(_take_random(CardLibrary.pool_for(color), 2))
 	for id in picks:
-		var base := _card_base_price(String(CardLibrary.get_def(id)["rarity"]))
+		var base := _card_base_price(card_rarity_of(id))
 		var price := int(round(base * rng.randf_range(0.9, 1.1)))
 		stock["cards"].append({"id": id, "price": price, "sold": false})
 	for i in range(3):

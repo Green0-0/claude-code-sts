@@ -98,6 +98,11 @@ func _clear() -> void:
 	_busy = false
 	combat = null
 	target_line.visible = false
+	_hovered_enemy = null
+	# Otherwise the last fight's targeting line ("… It's super effective!") is
+	# still on screen when the next one starts.
+	prompt_label.visible = false
+	prompt_label.text = ""
 
 
 func _build_enemy_views() -> void:
@@ -327,12 +332,27 @@ func _on_enemy_hover(view: EnemyView, inside: bool) -> void:
 		if combat != null:
 			combat.preview_target_index = _living_index(view)
 			_refresh_hand_text()
+			_show_matchup(view)
 	elif _hovered_enemy == view:
 		_hovered_enemy = null
 		if combat != null:
 			combat.preview_target_index = -1
 			_refresh_hand_text()
 	_refresh_target_preview()
+
+
+## Calls the matchup before the card is committed, so the type chart is legible
+## without having to know it by heart. The damage numbers on the cards already
+## update against whoever is hovered; this names the reason.
+func _show_matchup(view: EnemyView) -> void:
+	if selected_view == null or combat == null:
+		return
+	var note := PokeMoves.matchup_note(selected_view.card, combat)
+	if note == "":
+		return
+	prompt_label.text = "%s → %s  %s" % [selected_view.card.display_name(),
+			view.actor.name, note]
+	prompt_label.visible = true
 
 
 func _living_index(view: EnemyView) -> int:

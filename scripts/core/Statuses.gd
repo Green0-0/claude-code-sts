@@ -220,6 +220,102 @@ static var DEFS := {
 		"name": "Mode Shift", "debuff": false, "decay": "none", "color": Color(0.8, 0.8, 0.9),
 		"desc": "Shifts to Defensive Mode after taking {n} more damage.",
 	},
+	# ───────────────────────── Pokemon ailments & stages ─────────────────────────
+	# Ailments keep their series behaviour: burn chips HP and blunts physical
+	# attacks, paralysis costs you tempo, sleep and freeze cost you the turn.
+	"burn": {
+		"name": "Burn", "debuff": true, "decay": "tick", "color": Color(0.95, 0.45, 0.2),
+		"desc": "Loses HP each turn and deals 50% less physical damage. {n} turn(s) left.",
+	},
+	"paralysis": {
+		"name": "Paralysis", "debuff": true, "decay": "tick", "color": Color(0.95, 0.85, 0.25),
+		"desc": "Speed is quartered and it may lose its action. {n} turn(s) left.",
+	},
+	"sleep": {
+		"name": "Sleep", "debuff": true, "decay": "tick", "color": Color(0.55, 0.55, 0.8),
+		"desc": "Cannot act for {n} turn(s).",
+	},
+	"freeze": {
+		"name": "Freeze", "debuff": true, "decay": "none", "color": Color(0.6, 0.87, 0.95),
+		"desc": "Cannot act until it thaws (20% each turn).",
+	},
+	"confusion": {
+		"name": "Confusion", "debuff": true, "decay": "tick", "color": Color(0.9, 0.55, 0.85),
+		"desc": "33% chance to hurt itself instead of acting. {n} turn(s) left.",
+	},
+	"flinch": {
+		"name": "Flinch", "debuff": true, "decay": "turn_end", "color": Color(0.8, 0.75, 0.5),
+		"desc": "Loses its next action.",
+	},
+	"leech_seed": {
+		"name": "Leech Seed", "debuff": true, "decay": "tick", "color": Color(0.45, 0.8, 0.35),
+		"desc": "Drains HP to its attacker each turn. {n} turn(s) left.",
+	},
+	"trapped": {
+		"name": "Trapped", "debuff": true, "decay": "tick", "color": Color(0.7, 0.6, 0.4),
+		"desc": "Takes damage each turn and cannot flee. {n} turn(s) left.",
+	},
+	"infatuation": {
+		"name": "Infatuation", "debuff": true, "decay": "tick", "color": Color(0.95, 0.6, 0.75),
+		"desc": "50% chance to lose its action. {n} turn(s) left.",
+	},
+	"nightmare": {
+		"name": "Nightmare", "debuff": true, "decay": "tick", "color": Color(0.45, 0.35, 0.6),
+		"desc": "Loses HP each turn while it sleeps. {n} turn(s) left.",
+	},
+	"drowsy": {
+		"name": "Drowsy", "debuff": true, "decay": "tick", "color": Color(0.65, 0.65, 0.85),
+		"desc": "Falls asleep when this wears off. {n} turn(s) left.",
+	},
+	"heal_block": {
+		"name": "Heal Block", "debuff": true, "decay": "tick", "color": Color(0.8, 0.4, 0.5),
+		"desc": "Cannot be healed for {n} turn(s).",
+	},
+	"embargo": {
+		"name": "Embargo", "debuff": true, "decay": "tick", "color": Color(0.7, 0.5, 0.4),
+		"desc": "Cannot use potions for {n} turn(s).",
+	},
+	"disable": {
+		"name": "Disable", "debuff": true, "decay": "tick", "color": Color(0.6, 0.55, 0.7),
+		"desc": "Loses 1 Energy at the start of its turn. {n} turn(s) left.",
+	},
+	"identified": {
+		"name": "Identified", "debuff": true, "decay": "tick", "color": Color(0.85, 0.8, 0.6),
+		"desc": "Type immunities no longer protect it. {n} turn(s) left.",
+	},
+	# Stat stages. Signed like Strength, capped at +-6, and multiplicative
+	# (+1 is x1.5, -1 is x0.66) exactly as in the games.
+	"stage_atk": {
+		"name": "Attack", "debuff": false, "decay": "none", "color": Color(0.95, 0.45, 0.35),
+		"desc": "Attack stage {n}: physical damage dealt is scaled.", "stage": true,
+	},
+	"stage_df": {
+		"name": "Defense", "debuff": false, "decay": "none", "color": Color(0.7, 0.75, 0.9),
+		"desc": "Defense stage {n}: physical damage taken is scaled.", "stage": true,
+	},
+	"stage_spa": {
+		"name": "Sp. Atk", "debuff": false, "decay": "none", "color": Color(0.95, 0.55, 0.75),
+		"desc": "Sp. Atk stage {n}: special damage dealt is scaled.", "stage": true,
+	},
+	"stage_spd": {
+		"name": "Sp. Def", "debuff": false, "decay": "none", "color": Color(0.6, 0.85, 0.75),
+		"desc": "Sp. Def stage {n}: special damage taken is scaled.", "stage": true,
+	},
+	"stage_spe": {
+		"name": "Speed", "debuff": false, "decay": "none", "color": Color(0.85, 0.85, 0.45),
+		"desc": "Speed stage {n}: turn order and evasion are scaled.", "stage": true,
+	},
+	"stage_accuracy": {
+		"name": "Accuracy", "debuff": false, "decay": "none", "color": Color(0.85, 0.85, 0.7),
+		"desc": "Accuracy stage {n}: its moves are more or less likely to land.",
+		"stage": true,
+	},
+	"stage_evasion": {
+		"name": "Evasion", "debuff": false, "decay": "none", "color": Color(0.75, 0.85, 0.85),
+		"desc": "Evasion stage {n}: incoming moves are more or less likely to miss.",
+		"stage": true,
+	},
+
 	# Internal bookkeeping — never shown to the player.
 	"defensive_mode": {"name": "Defensive Mode", "debuff": false, "decay": "none",
 		"color": Color(0.8, 0.8, 0.9), "desc": "In defensive mode.", "hidden": true},
@@ -263,7 +359,25 @@ static var SHORT := {
 	"wraith_form": "Wraith", "strength_up_end": "Str Back", "fading": "Fading",
 	"curiosity": "Curious", "unawakened": "Unawake", "slow_start": "Slow",
 	"mode_shift": "Shift", "minion": "Minion",
+	"burn": "Burn", "paralysis": "Para", "sleep": "Sleep", "freeze": "Frozen",
+	"confusion": "Confused", "flinch": "Flinch", "leech_seed": "Seeded",
+	"trapped": "Trapped", "infatuation": "Infatuated", "nightmare": "Nightmare",
+	"drowsy": "Drowsy", "heal_block": "No Heal", "embargo": "Embargo",
+	"disable": "Disabled", "identified": "Identified",
+	"stage_atk": "Atk", "stage_df": "Def", "stage_spa": "SpA", "stage_spd": "SpD",
+	"stage_spe": "Spe", "stage_accuracy": "Acc", "stage_evasion": "Eva",
 }
+
+
+## Stat stages read as "Atk +2" rather than as a stack count, and are the only
+## statuses that are meaningful at a negative value.
+static func is_stage(id: String) -> bool:
+	return bool(get_def(id).get("stage", false))
+
+
+## The ailments that stop an actor from acting outright.
+static func is_incapacitating(id: String) -> bool:
+	return id in ["sleep", "freeze", "flinch"]
 
 
 static func short_name(id: String) -> String:

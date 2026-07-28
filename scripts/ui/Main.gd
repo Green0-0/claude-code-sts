@@ -21,6 +21,7 @@ const OVERLAY_Z := 1000
 @onready var gameover_stats: Label = $Screens/GameOverScreen/StatsLabel
 @onready var gameover_button: Button = $Screens/GameOverScreen/RestartButton
 @onready var card_picker: Control = $CardPicker
+@onready var pokemon_select: Control = $PokemonSelect
 @onready var top_bar: Panel = $TopBar
 @onready var toast: Label = $Toast
 
@@ -35,6 +36,7 @@ var _toast_timer: Timer = null
 func _ready() -> void:
 	get_window().theme = UiTheme.build()
 	card_picker.z_index = OVERLAY_Z
+	pokemon_select.z_index = OVERLAY_Z
 	toast.z_index = OVERLAY_Z + 1
 	_toast_timer = Timer.new()
 	_toast_timer.one_shot = true
@@ -43,6 +45,8 @@ func _ready() -> void:
 
 	title_screen.start_requested.connect(_on_start_run)
 	title_screen.continue_requested.connect(_on_continue_run)
+	title_screen.pokemon_requested.connect(func(): pokemon_select.open())
+	pokemon_select.chosen.connect(func(id): title_screen.start_with(id))
 	map_screen.node_chosen.connect(_on_map_node_chosen)
 	combat_screen.combat_over.connect(_on_combat_over)
 	combat_screen.choice_needed.connect(_on_combat_choice)
@@ -74,11 +78,20 @@ func _ready() -> void:
 		var clicker: Node = load("res://scripts/dev/ClickTest.gd").new()
 		clicker.name = "ClickTest"
 		add_child(clicker)
+	elif "--poke-shots" in cli:
+		var shot: Node = load("res://scripts/dev/Shot.gd").new()
+		shot.name = "Shot"
+		add_child(shot)
+	elif "--poke-test" in cli:
+		var poke: Node = load("res://scripts/dev/PokeTest.gd").new()
+		poke.name = "PokeTest"
+		add_child(poke)
 	elif "--rules-test" in cli:
 		var tester: Node = load("res://scripts/dev/RulesTest.gd").new()
 		tester.name = "RulesTest"
 		add_child(tester)
-	elif "--smoke" in cli or "--smoke-deep" in cli or "--shots" in cli:
+	elif "--smoke" in cli or "--smoke-deep" in cli or "--smoke-poke" in cli \
+			or "--shots" in cli:
 		var auto: Node = load("res://scripts/dev/AutoPlay.gd").new()
 		auto.name = "AutoPlay"
 		add_child(auto)
@@ -395,3 +408,5 @@ func _unhandled_input(event: InputEvent) -> void:
 		if card_picker.visible:
 			# Returns false for prompts that must be answered; the modal stays up.
 			card_picker.request_close()
+		elif pokemon_select.visible:
+			pokemon_select.request_close()

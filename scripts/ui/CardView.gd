@@ -56,7 +56,7 @@ func refresh() -> void:
 	var def := card.def()
 	var ctype: String = card.type()
 	var accent: Color = CardLibrary.type_tint(ctype)
-	var base: Color = CardLibrary.color_tint(card.color())
+	var base: Color = card.tint()
 
 	var sb := StyleBoxFlat.new()
 	sb.bg_color = base.darkened(0.55)
@@ -114,8 +114,13 @@ func refresh() -> void:
 	else:
 		cost_label.modulate = Color(1, 1, 1)
 
-	type_label.text = ctype.to_upper()
+	type_label.text = card.kind_line()
 	type_label.modulate = accent
+	# A move's own type is the thing worth reading, so it gets the type colour.
+	if card.is_pokemon_card():
+		type_label.modulate = base.lightened(0.35)
+		type_label.add_theme_font_size_override("font_size",
+				9 if type_label.text.length() > 14 else 11)
 
 	text_label.clear()
 	text_label.push_color(Color(0.92, 0.92, 0.9))

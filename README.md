@@ -4,6 +4,10 @@ A complete, playable deck-building roguelike: 2 characters, 157 cards, 45 enemie
 35 relics, 20 potions, 10 events and 3 acts of branching maps — with shops,
 campfires, elites, bosses and save/continue.
 
+It also ships a second, parallel game built from imported PokeAPI data: all
+**1025 Pokémon** are playable and encounterable, with real learnsets, the type
+chart, base stats and status ailments. See [Pokémon mode](#pokémon-mode).
+
 Built and verified against **Godot 4.7** (any Godot 4.4+ should load it).
 
 ---
@@ -21,9 +25,11 @@ The main scene is `scenes/Main.tscn`.
 
 ```bash
 godot --headless -- --rules-test   # 69 assertions on the combat maths
+godot --headless -- --poke-test    # 159 assertions on the Pokémon layer
 godot --headless -- --smoke        # one self-played run, prints a report
 godot --headless -- --smoke-deep   # 8 runs, immortal player, full 3-act coverage
-godot -- --click-test              # 30 assertions driven by synthesized clicks
+godot --headless -- --smoke-poke   # 8 self-played Pokémon runs
+godot -- --click-test              # 34 assertions driven by synthesized clicks
 godot --headless -- --shots        # save one PNG per screen to user://shots
 ```
 
@@ -40,8 +46,19 @@ failure.
 
 `--smoke-deep` is the integration test: it drives every screen, plays every room
 type, buys from shops, resolves events and fights all three acts' bosses. The last
-verified run: **8 complete 3-act clears, 221 combats, 4416 cards played, 44 of 45
-enemies and 113 cards exercised, zero errors.**
+verified run: **8 complete 3-act clears, 185 combats, 3424 cards played, 43
+enemies and 103 cards exercised, zero errors.**
+
+`--smoke-poke` is the same harness playing Pokémon, rotating through a deliberate
+spread (a frail starter, a wall, a glass cannon, a legendary, and the degenerate
+learnsets — Abra, Magikarp, Ditto). Last verified run: **5 of 8 complete 3-act
+clears, 168 combats, 2326 cards played, 166 distinct species fought, zero
+errors.** It clears fewer runs than the Spire harness by design — see
+[difficulty](#difficulty-is-not-flat-by-design).
+
+Note that `--click-test` needs an otherwise idle machine: it synthesizes mouse
+events and waits a frame between each, so a `--smoke-*` run in the background will
+make it fail spuriously and non-deterministically.
 
 ---
 
@@ -162,6 +179,144 @@ Card pool: 74 Ironclad, 59 Silent, 13 Colorless, 5 status and 6 curse cards —
 
 ---
 
+## Pokémon mode
+
+Pick **Pokémon ▸** on the title screen and search the dex by name, type or number.
+Choosing a species starts a normal three-act run where you *are* that Pokémon: your
+HP, Energy, draw and damage come from its base stats, your deck is its learnset, and
+the dungeon is stocked with other Pokémon instead of gremlins. Ironclad and Silent
+runs are untouched.
+
+### Importing the data
+
+The two scripts under `tools/` are the whole pipeline. Neither runs at play time —
+the game only ever reads the three JSON files they produce.
+
+```bash
+python3 tools/fetch_pokeapi.py     # mirrors PokeAPI into .pokecache/ (~200 MB, cached)
+python3 tools/build_data.py        # compacts it into data/*.json (1.4 MB, committed)
+```
+
+| File | Contents |
+|---|---|
+| `data/pokemon.json` | 1025 species: base stats, types, BST, weight, legendary flags, and a **79 120-row learnset** (`[move, level, method]`) |
+| `data/moves.json` | 798 moves: power, accuracy, PP, priority, damage class, ailment + chance, stat changes, drain/recoil, healing, multi-hit range, crit rate |
+| `data/types.json` | the full 18×18 effectiveness chart |
+
+`fetch_pokeapi.py` caches every response, so a re-run is free and deleting a cached
+file is how you force a refetch. `build_data.py` keeps the data faithful — no
+balancing lives in it, so the game can be retuned without touching the network.
+
+### From Pokémon numbers to Spire numbers
+
+Every conversion is in `PokeBalance.gd`, deliberately in one file:
+
+* **Damage** is the main-series formula, `((2L/5+2) × power × Atk / Def) / 50 + 2`,
+  at a notional level of 12 — which puts a 40-power move at about 6 damage, the
+  same scale as a Strike. Type effectiveness, STAB (×1.5), stat stages, burn and
+  criticals multiply on top, and the result is then passed through the Spire's own
+  Strength/Weak/Vulnerable pipeline so relics still work.
+* **HP** follows base HP with BST mixed in, so Blissey is a wall and Shedinja is
+  paper. Elites get ×1.35 and bosses ×1.9.
+* **Speed** buys tempo: ≥110 base Speed is a 4th Energy, ≥90 is a 6th card. It also
+  sets initiative — anything faster than you attacks *before* your first turn, and
+  the enemy phase runs fastest-first.
+* **Defense / Sp. Def** are read by the damage formula, so a physical move into
+  Alakazam lands much harder than a special one.
+* **Cards** are priced by power (≤40 → 0 energy, ≤75 → 1, ≤110 → 2, above → 3),
+  discounted for priority moves, and moves at 140+ power or 5 PP exhaust.
+* **The player is a trained specimen**, not a wild one. Act 1 is stocked around
+  300 BST regardless of who is playing, so a species below that band gets its
+  stat line scaled toward it (`trainer_scale`, capped at 1.8×; Bulbasaur gets
+  1.01×, Mewtwo exactly 1.0×). Without it a wild-statted Magikarp had 43 HP and
+  hit for 3 against two foes with 157 HP between them.
+* **You fight packs**, one Pokémon against two or three, every fight, for three
+  acts — so player HP carries a flat `PACK_SCALE` on top. Without it the trade is
+  lost on arithmetic alone, whoever you pick.
+
+### Difficulty is not flat, by design
+
+Because encounters are pinned to a fixed BST curve and your species is not, your
+choice at the title screen *is* the difficulty setting. Mewtwo (680 BST) opens
+with 141 HP and 131 damage a turn; Caterpie (195) opens with 93 HP and 12. The
+picker shows BST, HP, Energy and the full stat line for exactly this reason.
+
+The weakest handful — Magikarp, Caterpie, Metapod, Abra — will usually lose, and
+that is left in rather than balanced away: it is what those species are. In the
+last self-play run Bulbasaur, Snorlax, Alakazam, Mewtwo and Gyarados all cleared
+three acts; Magikarp reached Act 2, and Abra and Ditto — the two with no usable
+level-up moves at all — did not get far. What was fixed is the case where they
+could not play at all. A wild Magikarp knows only
+Tackle, and Tackle does *nothing* to a Ghost — the fight was unwinnable by rule,
+not by difficulty. Now, as in the games, a Pokémon with no move that will land
+resorts to **Struggle**, which is typeless and always connects. Enemies get the
+same fallback, so no fight can stall forever.
+
+### Encounters depend on BST
+
+Nothing is hand-listed. Every species carries a weight in every (act, encounter
+kind) slot, and that weight is a **bell curve over its base stat total** centred on
+a band that climbs through the dungeon — Act 1 "weak" centres on 300 BST, Act 3
+"boss" on 660. So Rattata is 0.23% of Act 1's weak table and Dragonite is
+0.00002%; by the Act 3 boss slot that is inverted. Legendaries and mythicals are
+excluded everywhere except boss slots (and late elites, at reduced odds), and
+low-BST species arrive in packs of two or three.
+
+`PokeEncounters.probability(name, act, kind)` returns the actual percentage, and
+`top_candidates(act, kind)` lists the likeliest — both are asserted on by
+`--poke-test`.
+
+### Move functionality
+
+Moves are built from PokeAPI's structured `meta` fields, never by parsing English:
+ailment and ailment chance, stat changes and their chance, drain and recoil,
+healing, flinch chance, multi-hit ranges, crit rate, priority and accuracy. **654 of
+798 moves** get real mechanical effects; the remainder (Metronome, Transform,
+weather and terrain) have nothing this engine models and are excluded from decks
+and reward pools rather than shipped as blank cards.
+
+Computed-power moves, which PokeAPI reports with a null power, are implemented
+explicitly: Low Kick and Grass Knot read the target's weight, Heavy Slam the weight
+ratio, Electro Ball and Gyro Ball the Speed gap, Flail and Reversal the user's
+remaining HP, Punishment the target's raised stages, Counter and Mirror Coat the
+last hit taken, plus the fixed-damage family (Seismic Toss, Night Shade, Dragon
+Rage, Sonic Boom, Psywave, Super Fang, Endeavor, Final Gambit) and the four OHKO
+moves at their real 30% accuracy.
+
+### Status effects
+
+Ailments keep their series behaviour: **Burn** chips 1/16 max HP a turn and halves
+physical damage dealt, **Paralysis** quarters Speed and costs Energy, **Sleep** and
+**Freeze** cost the turn outright (Freeze with a 20% thaw check), **Confusion** has
+a 33% chance to hurt the sufferer instead, **Flinch** eats one action, **Leech
+Seed** moves HP across, **Trapped** chips 1/8 a turn, **Nightmare** only bites
+while asleep, **Yawn** matures into Sleep, **Heal Block** stops healing and
+**Embargo** seals potions. All seven **stat stages** are modelled at the real
+±50%-per-step multipliers, capped at ±6, and Artifact can shrug off a drop.
+
+### Where it lives
+
+```
+tools/fetch_pokeapi.py   mirrors the API into .pokecache/
+tools/build_data.py      compacts the cache into data/*.json
+scripts/core/
+  PokeData.gd            loads data/, answers the type chart
+  PokeBalance.gd         every Pokémon-number → Spire-number conversion
+  PokeMoves.gd           move → card definition, including computed power
+  PokeMobs.gd            species → enemy definition, moveset and AI
+  PokeCharacters.gd      species → playable character, deck and reward pool
+  PokeEncounters.gd      BST-weighted encounter tables
+scripts/ui/PokemonSelect.gd   searchable dex picker
+scripts/dev/PokeTest.gd       159 assertions over the whole layer
+scripts/dev/Shot.gd           --poke-shots, one PNG per Pokémon-mode screen
+```
+
+The existing libraries delegate rather than branch everywhere: `CardLibrary`,
+`EnemyLibrary` and `EncounterLibrary` each check for a Pokémon id and hand off, so
+the Spire content and its tests are untouched.
+
+---
+
 ## Design notes and deliberate simplifications
 
 These are places where I chose a defensible approximation rather than the exact
@@ -185,6 +340,12 @@ Adding content usually means adding one dictionary entry:
 
 * **A card** — add to `CardLibrary.CARDS`. It joins the reward, shop and
   random-card pools automatically based on `color` and `rarity`.
+* **A Pokémon move effect** — extend `PokeMoves._emit_*` (they read PokeAPI's
+  `meta` fields) and add the matching op to `Combat._apply_effect`. Computed-power
+  moves go in `PokeMoves.VARIABLE_POWER` / `FIXED_DAMAGE` plus a branch in
+  `Combat._variable_power` / `_fixed_damage`.
+* **Pokémon balance** — every conversion is a constant or a function in
+  `PokeBalance.gd`; nothing needs refetching.
 * **An enemy** — add to `EnemyLibrary.ENEMIES` with its moves, then add a branch to
   `choose_move()` and list it in an `EncounterLibrary` tier.
 * **A relic** — add to `RelicLibrary.RELICS`, then hook it where it applies

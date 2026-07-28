@@ -59,6 +59,28 @@ func rarity() -> String:
 	return def()["rarity"]
 
 
+## Colour the card face is painted in. A move is coloured by its own type, which
+## is the thing the player needs to read at a glance in a Pokemon run.
+func tint() -> Color:
+	var poke: Dictionary = def().get("poke", {})
+	if not poke.is_empty():
+		return PokeData.type_color(String(poke.get("type", "normal")))
+	return CardLibrary.color_tint(color())
+
+
+## The line under the card name: "ATTACK", or "ELECTRIC · SPEC" for a move.
+func kind_line() -> String:
+	var poke: Dictionary = def().get("poke", {})
+	if poke.is_empty():
+		return type().to_upper()
+	var cls := String(poke.get("class", "status"))
+	var label := PokeData.display_name(String(poke.get("type", "normal"))).to_upper()
+	match cls:
+		"physical": return label + " · PHYS"
+		"special": return label + " · SPEC"
+	return label + " · STATUS"
+
+
 func target_kind() -> String:
 	return def()["target"]
 
@@ -147,9 +169,17 @@ func raw_params() -> Dictionary:
 	return p
 
 
+func is_pokemon_card() -> bool:
+	return def().has("poke")
+
+
 ## Parameters with combat scaling (Strength, Dexterity, Weak, Frail, Vulnerable)
 ## applied so the card text shows the numbers the player will actually get.
 func display_params(combat = null) -> Dictionary:
+	# A move's damage comes out of the Pokemon formula, not the Spire's flat
+	# numbers, so it is computed against whoever holds the card and its target.
+	if is_pokemon_card():
+		return PokeMoves.display_params(self, combat)
 	var p := raw_params()
 	if combat == null or combat.player == null:
 		return p

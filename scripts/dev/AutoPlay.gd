@@ -5,6 +5,7 @@ extends Node
 ##
 ##   godot --headless -- --smoke        one ordinary run
 ##   godot --headless -- --smoke-deep   immortal player, many runs, full coverage
+##   godot --headless -- --smoke-poke   the same, played as Pokemon
 ##
 ## Deep mode keeps the player alive so every act, boss, shop and event gets hit.
 
@@ -15,7 +16,13 @@ var steps: int = 0
 var runs_done: int = 0
 var target_runs: int = 1
 var immortal: bool = false
+var poke_mode: bool = false
 var shots: bool = false
+
+## A deliberate spread for Pokemon runs: a frail starter, a bulky wall, a glass
+## cannon, a legendary, and the species with no usable level-up moves.
+const POKE_ROTATION := ["bulbasaur", "snorlax", "alakazam", "mewtwo", "abra",
+		"magikarp", "gyarados", "ditto"]
 var shot_dir: String = "user://shots"
 var shots_taken: Dictionary = {}
 var _shot_cooldown: int = 0
@@ -32,7 +39,8 @@ func _ready() -> void:
 	var args: Array = []
 	args.append_array(OS.get_cmdline_args())
 	args.append_array(OS.get_cmdline_user_args())
-	immortal = "--smoke-deep" in args
+	poke_mode = "--smoke-poke" in args
+	immortal = "--smoke-deep" in args or poke_mode
 	shots = "--shots" in args
 	if shots:
 		Engine.time_scale = 1.0
@@ -77,7 +85,12 @@ func _tick() -> void:
 		return
 	match screen.name:
 		"TitleScreen":
-			main._on_start_run("ironclad" if runs_done % 2 == 0 else "silent", 0)
+			if poke_mode:
+				var mon: String = POKE_ROTATION[runs_done % POKE_ROTATION.size()]
+				print("[autoplay] run %d as %s" % [runs_done + 1, mon])
+				main._on_start_run(PokeCharacters.character_id(mon), 0)
+			else:
+				main._on_start_run("ironclad" if runs_done % 2 == 0 else "silent", 0)
 		"MapScreen":
 			_drive_map()
 		"CombatScreen":

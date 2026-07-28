@@ -483,10 +483,16 @@ static var ENEMIES := {
 
 
 static func has(id: String) -> bool:
+	if PokeMobs.is_mob(id):
+		return not PokeMobs.get_def(id).is_empty()
 	return ENEMIES.has(id)
 
 
 static func get_def(id: String) -> Dictionary:
+	if PokeMobs.is_mob(id):
+		var d := PokeMobs.get_def(id)
+		if not d.is_empty():
+			return d
 	return ENEMIES.get(id, ENEMIES["jaw_worm"])
 
 
@@ -510,6 +516,9 @@ static func spawn(id: String, rng: RandomNumberGenerator, ascension: int = 0) ->
 	for k in d.get("roll", {}):
 		var r: Array = d["roll"][k]
 		a.rolled[k] = rng.randi_range(int(r[0]), int(r[1]))
+	# A Pokemon also carries its species' base stats and types into the fight.
+	if PokeMobs.is_mob(id):
+		PokeMobs.decorate(a, id)
 	return a
 
 
@@ -535,6 +544,10 @@ static func _repeated(a: Actor, move: String, times: int) -> bool:
 
 ## Decide which move the enemy will use on its upcoming turn.
 static func choose_move(a: Actor, combat) -> String:
+	# Pokemon share one heuristic driven by their own moves, rather than the
+	# hand-written script each Spire enemy gets below.
+	if PokeMobs.is_mob(a.enemy_id):
+		return PokeMobs.choose_move(a, combat)
 	var rng: RandomNumberGenerator = combat.rng
 	var t: int = a.turn_count
 	match a.enemy_id:
