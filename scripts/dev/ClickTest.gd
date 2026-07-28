@@ -114,9 +114,45 @@ func _run() -> void:
 	_check("hand shrank by two", c.hand.size(), hand_before - 2)
 	_check("block gained", c.player.block > 0, true)
 
+	await _test_prompt_draws_above_the_hand(c)
 	await _test_escape_during_mandatory_choice(c)
 	await _test_picker_reopen(c)
 	await _test_event_prompt()
+
+
+## The prompt is modal, but the hand fans itself with z_index, and z_index beats
+## tree order. Unless the picker outranks the whole fan the hand paints over it,
+## burying Confirm — clickable but invisible, which reads as a soft-lock.
+func _test_prompt_draws_above_the_hand(c: Combat) -> void:
+	print("[click] --- prompt draws above the hand")
+	var picker = main.card_picker
+	var survivor := Card.create("survivor")
+	c.hand.append(survivor)
+	c.energy = 3
+	c.play_card(survivor, 0)
+	await get_tree().process_frame
+	_check("prompt open", picker.visible, true)
+
+	var top: int = main.combat_screen.HAND_Z_DRAG
+	for v in main.combat_screen.card_views:
+		top = maxi(top, v.z_index)
+	_check("picker outranks every hand card", picker.z_index > top, true)
+
+	# And the button really is the thing under the cursor at its own centre.
+	var point: Vector2 = picker.confirm_button.get_global_rect().get_center()
+	var motion := InputEventMouseMotion.new()
+	motion.position = point
+	motion.global_position = point
+	Input.parse_input_event(motion)
+	await get_tree().process_frame
+	_check("confirm is the control under the cursor",
+			get_viewport().gui_get_hovered_control(), picker.confirm_button)
+
+	if picker.visible and picker._views.size() > 0:
+		await _click_control(picker._views[0])
+		await _click_control(picker.confirm_button)
+		await get_tree().process_frame
+	_check("prompt answered", c.pending_choice.is_empty(), true)
 
 
 ## A mandatory prompt must not be dismissable, or the run soft-locks: the model

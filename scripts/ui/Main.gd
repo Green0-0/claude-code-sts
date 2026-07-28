@@ -2,6 +2,13 @@ extends Node
 
 ## Screen router and run flow. Owns every screen and decides what happens next.
 
+## Being later in the tree is not enough to draw on top: the combat hand raises
+## each card's z_index to fan them (up to CombatScreen.HAND_Z_DRAG), and z_index
+## outranks tree order, so hand cards would paint straight over a modal opened on
+## top of them — hiding the picker's Confirm button behind the fan. Overlays sit
+## above the highest z any screen hands out.
+const OVERLAY_Z := 1000
+
 @onready var title_screen: Control = $Screens/TitleScreen
 @onready var map_screen: Control = $Screens/MapScreen
 @onready var combat_screen: Control = $Screens/CombatScreen
@@ -27,6 +34,8 @@ var _toast_timer: Timer = null
 
 func _ready() -> void:
 	get_window().theme = UiTheme.build()
+	card_picker.z_index = OVERLAY_Z
+	toast.z_index = OVERLAY_Z + 1
 	_toast_timer = Timer.new()
 	_toast_timer.one_shot = true
 	_toast_timer.timeout.connect(func(): toast.visible = false)

@@ -11,6 +11,12 @@ const CARD_SCENE := preload("res://scenes/CardView.tscn")
 const ENEMY_SCENE := preload("res://scenes/EnemyView.tscn")
 const PLAY_LINE_Y := 470.0
 const CLICK_SLOP := 12.0
+## The fan overlaps itself, so hand cards need explicit z-indices to stack: later
+## cards over earlier ones, the hovered one over its neighbours, the dragged one
+## over everything. z_index is global, not scoped to this screen, so anything
+## meant to sit above the hand must clear HAND_Z_DRAG — see Main.OVERLAY_Z.
+const HAND_Z_HOVER := 400
+const HAND_Z_DRAG := 500
 
 @onready var enemy_area: Control = $EnemyArea
 @onready var hand_area: Control = $HandArea
@@ -208,7 +214,7 @@ func _on_card_pressed(view: CardView) -> void:
 	_drag_view = view
 	_drag_origin = get_global_mouse_position()
 	_drag_active = false
-	view.z_index = 500
+	view.z_index = HAND_Z_DRAG
 
 
 func _on_card_released(view: CardView, at: Vector2) -> void:
@@ -361,7 +367,7 @@ func _on_card_hover(view: CardView, inside: bool) -> void:
 			t.set_parallel(true)
 			t.tween_property(view, "position", view.home_position + Vector2(0, -26), 0.1)
 			t.tween_property(view, "scale", Vector2.ONE * 1.08, 0.1)
-			view.z_index = 400
+			view.z_index = HAND_Z_HOVER
 	else:
 		if view != selected_view:
 			view.z_index = card_views.find(view)
