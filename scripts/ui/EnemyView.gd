@@ -6,11 +6,12 @@ extends Control
 signal clicked(view: EnemyView)
 signal hover_changed(view: EnemyView, inside: bool)
 
-const VIEW_SIZE := Vector2(190, 250)
+const VIEW_SIZE := Vector2(190, 296)
 
 @onready var intent_label: Label = $IntentLabel
 @onready var intent_detail: Label = $IntentDetail
 @onready var body: Panel = $Body
+@onready var sprite: TextureRect = $Body/Sprite
 @onready var name_label: Label = $Body/NameLabel
 @onready var hp_bar: ProgressBar = $HpBar
 @onready var hp_label: Label = $HpBar/HpLabel
@@ -22,10 +23,6 @@ var actor: Actor = null
 var combat: Combat = null
 var index: int = 0
 var targeted: bool = false
-
-var _sprite: TextureRect = null
-var _sprite_home: Vector2 = Vector2.ZERO
-var _bob_phase: float = 0.0
 
 
 func _ready() -> void:
@@ -44,6 +41,14 @@ func setup(a: Actor, cmb: Combat, idx: int) -> void:
 	index = idx
 	if not is_node_ready():
 		await ready
+	# Enemies keep the sprite's own orientation; only the player is mirrored.
+	SpriteCache.dress(sprite, SpriteCache.texture_for_actor(a), false)
+	if not sprite.visible:
+		# The Spire's own cast has no sprite, so the name takes the whole panel
+		# back rather than sitting in a strip under empty space.
+		name_label.anchor_top = 0.0
+		name_label.offset_top = 0.0
+		name_label.add_theme_font_size_override("font_size", 16)
 	_style()
 	refresh()
 
@@ -67,35 +72,7 @@ func _style() -> void:
 	sb.set_corner_radius_all(10)
 	body.add_theme_stylebox_override("panel", sb)
 
-	_build_sprite()
 	UiTheme.style_hp_bar(hp_bar)
-
-
-## The species portrait, sat on the body panel with the name tucked underneath.
-## Pixel art, so it is scaled by a whole number and left unfiltered.
-func _build_sprite() -> void:
-	var tex := PokeSprites.for_actor(actor)
-	if tex == null:
-		return
-	_sprite = PokeSprites.make_rect(tex, Vector2(PokeSprites.CELL * 1.5,
-			PokeSprites.CELL * 1.5))
-	_sprite_home = Vector2((body.size.x - _sprite.size.x) * 0.5, -14.0)
-	_sprite.position = _sprite_home
-	body.add_child(_sprite)
-	name_label.vertical_alignment = VERTICAL_ALIGNMENT_BOTTOM
-	name_label.add_theme_font_size_override("font_size", 13)
-	# Idle bob, driven per-frame rather than by a looping Tween: an endless
-	# tween outlives the node it animates and has to be torn down by hand.
-	_bob_phase = randf() * TAU
-	set_process(true)
-
-
-func _process(delta: float) -> void:
-	if _sprite == null or not is_instance_valid(_sprite):
-		set_process(false)
-		return
-	_bob_phase += delta * 1.9
-	_sprite.position = _sprite_home + Vector2(0, sin(_bob_phase) * 4.5)
 
 	var rsb := StyleBoxFlat.new()
 	rsb.bg_color = Color(0, 0, 0, 0)
@@ -155,6 +132,13 @@ func refresh() -> void:
 		status_box.add_child(chip)
 
 
+## The visible card face, which is what effects should land on. The view itself
+## is taller than this — it also carries the intent above and the HP and status
+## chips below, and an effect covering all of that reads as missing.
+func card_rect() -> Rect2:
+	return Rect2(body.global_position, body.size)
+
+
 func set_targeted(value: bool) -> void:
 	targeted = value
 	if target_ring != null:
@@ -165,14 +149,6 @@ func flash() -> void:
 	var t := create_tween()
 	t.tween_property(body, "modulate", Color(1.6, 1.0, 1.0), 0.06)
 	t.tween_property(body, "modulate", Color(1, 1, 1), 0.14)
-	# The sprite takes the hit too: a quick squash and recoil, which is what
-	# makes a number on screen feel like it landed on something alive.
-	if _sprite != null:
-		var s := create_tween()
-		s.set_parallel(true)
-		s.tween_property(_sprite, "scale", Vector2(1.18, 0.84), 0.05)
-		s.chain().tween_property(_sprite, "scale", Vector2.ONE, 0.16) \
-				.set_ease(Tween.EASE_OUT).set_trans(Tween.TRANS_BACK)
 
 
 func death_fade() -> void:

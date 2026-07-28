@@ -62,16 +62,14 @@ func refresh() -> void:
 	sb.bg_color = base.darkened(0.55)
 	sb.border_color = accent if playable else accent.darkened(0.55)
 	sb.set_border_width_all(3)
-	sb.set_corner_radius_all(16)
-	# A soft coloured bloom instead of a hard drop shadow, so a hand of cards
-	# reads as a warm fan rather than a stack of cut-outs.
-	sb.shadow_color = Color(base.r, base.g, base.b, 0.35)
-	sb.shadow_size = 9
+	sb.set_corner_radius_all(10)
+	sb.shadow_color = Color(0, 0, 0, 0.45)
+	sb.shadow_size = 6
 	frame.add_theme_stylebox_override("panel", sb)
 
 	var bsb := StyleBoxFlat.new()
 	bsb.bg_color = base
-	bsb.set_corner_radius_all(10)
+	bsb.set_corner_radius_all(6)
 	banner.add_theme_stylebox_override("panel", bsb)
 
 	var csb := StyleBoxFlat.new()
@@ -85,7 +83,7 @@ func refresh() -> void:
 	asb.bg_color = base.darkened(0.75)
 	asb.border_color = base.darkened(0.35)
 	asb.set_border_width_all(1)
-	asb.set_corner_radius_all(10)
+	asb.set_corner_radius_all(6)
 	art_panel.add_theme_stylebox_override("panel", asb)
 	art_glyph.text = _glyph_for(ctype)
 	art_glyph.modulate = accent.darkened(0.15)
@@ -138,7 +136,7 @@ func refresh() -> void:
 			gsb.bg_color = Color(0, 0, 0, 0)
 			gsb.border_color = Color(1, 0.92, 0.5)
 			gsb.set_border_width_all(3)
-			gsb.set_corner_radius_all(18)
+			gsb.set_corner_radius_all(12)
 			glow.add_theme_stylebox_override("panel", gsb)
 
 

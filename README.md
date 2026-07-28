@@ -29,9 +29,8 @@ godot --headless -- --poke-test    # 159 assertions on the Pokémon layer
 godot --headless -- --smoke        # one self-played run, prints a report
 godot --headless -- --smoke-deep   # 8 runs, immortal player, full 3-act coverage
 godot --headless -- --smoke-poke   # 8 self-played Pokémon runs
-godot -- --click-test              # 41 assertions driven by synthesized clicks
+godot -- --click-test              # 34 assertions driven by synthesized clicks
 godot --headless -- --shots        # save one PNG per screen to user://shots
-godot -- --poke-shots              # Pokémon screens + each execution filmed frame by frame
 ```
 
 `--click-test` needs a real display (the headless dummy display server does not do
@@ -297,71 +296,63 @@ while asleep, **Yawn** matures into Sleep, **Heal Block** stops healing and
 
 ### Sprites
 
-Every species wears its own art, from
-[github.com/PokeAPI/sprites](https://github.com/PokeAPI/sprites) — the 96×96
-pixel-art front sprites, drawn with nearest-neighbour filtering so they stay
-crisp scaled up. They appear on the enemy cards, on the player's panel, and
-beside every row of the dex picker, with a slow idle bob and a squash-recoil
-when something lands on them.
+`tools/fetch_sprites.py` pulls the front-default sprites from
+[PokeAPI/sprites](https://github.com/PokeAPI/sprites) into
+`assets/sprites/pokemon/` — 1025 PNGs, about 1 MB all told, committed.
 
 ```bash
-python3 tools/fetch_sprites.py    # 1025 PNGs from the sprite repo (~1 MB)
-python3 tools/build_atlas.py      # packs them into assets/pokemon_atlas.png
+python3 tools/fetch_sprites.py
 ```
 
-The atlas is the whole point of the second step: 1025 loose PNGs would mean 1025
-Godot `.import` files and 1025 disk reads, against one 2.2 MB texture and one of
-each. The grid layout is implicit — cell = dex − 1 across 33 columns — so there
-is no manifest to fall out of step with the data.
+`SpriteCache.gd` loads them straight from the PNG rather than through Godot's
+import pipeline, so they work without an editor pass. Two things happen on load:
 
-The HOME renders and official artwork were the other candidates and were passed
-over on size: the same dex is 80 MB and 120 MB respectively, and neither scales
-into a card frame as cleanly as pixel art does.
+* **Trimming.** Every sprite sits on the same 96×96 canvas, so a Diglett fills a
+  corner of it and a Wailord fills the whole thing. Each is cropped to its used
+  rect, so the roster reads at a consistent scale instead of a random one.
+* **Mirroring.** The player stands on the left of the board, so its sprite is
+  flipped horizontally to face the enemies; enemies keep their own orientation.
+  Both sides are drawn with nearest-neighbour filtering — these are pixel art.
 
-### Card execution
+### Card execution animations
 
-Playing a card is a performance, and it resolves **on impact** rather than on
-release, so the numbers land on the frame the animation says they do. The hand
-is locked while one is running. Enemies get the same treatment, their move
-flying at you from wherever they stand.
+Playing a card runs it as a physical act, and the card's effect is applied at the
+moment of impact rather than the moment of the click, so the numbers land on the
+hit. `CardFx.gd` choreographs three sequences:
 
-There are three routines, and the third is a lie:
+| | |
+|---|---|
+| **Attack** | The card lifts out of the hand and ascends, pale and half-transparent. It drifts over the target and cocks back, then falls in a hard, accelerating chop — a thrown blade. On contact: a cleaving streak across the target, a shockwave punched out from the point of impact, a spray thrown off the edge, and a screen shake. |
+| **Boon** (a status card that helps you) | The same ethereal rise, then a slow settle and a melt — the card flattens into the target and vanishes, spreading rings across it like a stone dropped into a lake. |
+| **Hex** (a status card aimed at the enemy) | Wears the Boon animation exactly, right up to the last of the landing. Then it drops the disguise: the colour sours, it snaps down hard, and it breaks over the target's card like a cursed mirror — a white flash, a fracture web racing out from the impact, and shards tumbling away. |
 
-**Attack** — the card lifts away weightless: rising, paling, swelling, turning
-slightly, eased *out* so it looks lifted rather than thrown. It hangs. Then
-everything the ascent gave away comes back at once — eased *in*, still
-accelerating when it arrives, scale snapping down as it buries itself. On
-contact the screen kicks, the frame holds still for a beat of hitstop, and the
-target takes three gashes: one committed stroke and two raking alongside it,
-each a hot white core inside a wider soft edge, wiping open fast and fading.
-A shockwave rings out and shrapnel scatters under gravity.
+Which one a card gets comes from what it actually does: attacks are attacks;
+anything else is a Hex if any of its effects damages the enemy or lands a status
+or stat drop on something other than you, and a Boon otherwise. Enemy turns get
+the same treatment — an enemy has no cards, so one is built from the move it has
+telegraphed and thrown at the player.
 
-**Blessing** (a status card on yourself) — the same ascent, a touch slower and
-softer. Then it settles, eased in and out, and *melts*: losing height far faster
-than width, as though soaking in. The ripple starts before it has finished
-going — four concentric rings running outward and flattening as they spread,
-squashed vertically so they read as a surface seen at an angle rather than as
-flat circles.
+Effects are drawn procedurally (`scripts/ui/fx/`) rather than from assets: the
+ripple is squashed rings so the surface reads as a plane; the fracture is a
+generated web of radial cracks and joining rings, revealed over time so it
+propagates rather than appearing; the slash is a tapered streak with a shockwave
+and a particle spray. The cursed-mirror break is parented into a clipping frame
+cut to the target's card, so the mirror that shatters is the target's own.
 
-**Curse** (a status card on someone else) — opens as the blessing, beat for
-beat, with nothing to read. At 72% of the descent the pretence drops: it snaps
-the rest of the way down on an exponential ease in a twelfth of the time, and
-the target breaks like a mirror — seven to nine radial fractures with branches
-peeling off them, each a dark split with a pale glint caught along it, then the
-glass falls out of the frame.
+Animations are cosmetic and self-disabling: `CardFx.is_enabled()` is false under
+the headless display server, so the self-play harness and the rules tests are
+never made to wait on a tween.
 
-`CardFxLayer` choreographs the flight; `CardFx` draws the marks. Everything is
-vector drawing rather than sprites, so each mark is sized to whatever it landed
-on — off the target's *shorter* side, since using the diagonal lets a tall card's
-marks hang past its edges and read as belonging to nothing.
+```bash
+godot -- --fx-shots     # each sequence captured as a strip of frames
+```
 
 ### Where it lives
 
 ```
 tools/fetch_pokeapi.py   mirrors the API into .pokecache/
 tools/build_data.py      compacts the cache into data/*.json
-tools/fetch_sprites.py   pulls sprites from the PokeAPI sprite repo
-tools/build_atlas.py     packs them into assets/pokemon_atlas.png
+tools/fetch_sprites.py   pulls the sprite set into assets/sprites/
 scripts/core/
   PokeData.gd            loads data/, answers the type chart
   PokeBalance.gd         every Pokémon-number → Spire-number conversion
@@ -369,13 +360,14 @@ scripts/core/
   PokeMobs.gd            species → enemy definition, moveset and AI
   PokeCharacters.gd      species → playable character, deck and reward pool
   PokeEncounters.gd      BST-weighted encounter tables
-  PokeSprites.gd         atlas lookup: dex number → texture
-scripts/ui/
-  PokemonSelect.gd       searchable dex picker
-  CardFxLayer.gd         card execution: the flight and its choreography
-  CardFx.gd              the marks — gashes, shockwaves, ripples, fractures
+scripts/ui/SpriteCache.gd     loads, trims and mirrors the sprites
+scripts/ui/CardFx.gd          choreographs the three execution sequences
+scripts/ui/fx/SlashFx.gd      the cut, shockwave and spray
+scripts/ui/fx/RippleFx.gd     lake rings for a boon landing
+scripts/ui/fx/GlassCrackFx.gd the cursed-mirror break
+scripts/ui/PokemonSelect.gd   searchable dex picker
 scripts/dev/PokeTest.gd       159 assertions over the whole layer
-scripts/dev/Shot.gd           --poke-shots, screens plus each execution filmed
+scripts/dev/Shot.gd           --poke-shots, one PNG per Pokémon-mode screen
 ```
 
 The existing libraries delegate rather than branch everywhere: `CardLibrary`,

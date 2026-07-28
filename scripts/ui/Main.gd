@@ -78,6 +78,10 @@ func _ready() -> void:
 		var clicker: Node = load("res://scripts/dev/ClickTest.gd").new()
 		clicker.name = "ClickTest"
 		add_child(clicker)
+	elif "--fx-shots" in cli:
+		var fx: Node = load("res://scripts/dev/FxShot.gd").new()
+		fx.name = "FxShot"
+		add_child(fx)
 	elif "--poke-shots" in cli:
 		var shot: Node = load("res://scripts/dev/Shot.gd").new()
 		shot.name = "Shot"

@@ -118,58 +118,6 @@ func _run() -> void:
 	await _test_escape_during_mandatory_choice(c)
 	await _test_picker_reopen(c)
 	await _test_event_prompt()
-	# Last, because it starts a fresh run: anything sharing the combat built in
-	# _run() has to have finished before the deck is replaced.
-	await _test_card_execution()
-
-
-## Playing a card now runs an execution animation and only resolves on impact,
-## which is a path the autoplay harness never takes — it calls the engine
-## directly. So this drives it the way a player does: click the card, click the
-## target, and check the damage lands once the animation is over rather than
-## when the mouse was released.
-func _test_card_execution() -> void:
-	print("[click] --- card execution animation")
-	Run.start_run(PokeCharacters.character_id("pikachu"), 31337)
-	main._show(main.combat_screen)
-	var screen = main.combat_screen
-	screen.begin([PokeMobs.enemy_id("squirtle")], "monster")
-	await get_tree().process_frame
-
-	var c: Combat = screen.combat
-	var foe: Actor = c.enemies[0]
-	# Find an attack in hand, which is the routine with the impact.
-	var attack_view = null
-	for v in screen.card_views:
-		if v.card.type() == "attack" and c.can_play(v.card, 0)["ok"]:
-			attack_view = v
-			break
-	if attack_view == null:
-		_check("pikachu drew an attack", 0, 1)
-		return
-	_check("found an attack to play", attack_view.card.type(), "attack")
-
-	var hp_before := foe.hp
-	var hand_before := c.hand.size()
-	await _click_control(attack_view)          # select
-	await _click_control(screen.enemy_views[0])  # commit at the target
-
-	# Mid-flight: the card must not have resolved, and the hand must be locked.
-	_check("resolution waits for impact", foe.hp, hp_before)
-	_check("the hand is locked mid-execution", screen._busy, true)
-
-	# The whole routine is under a second; give it two and then check.
-	var waited := 0.0
-	while screen.fx_layer.is_busy() and waited < 2.0:
-		await get_tree().create_timer(0.05, true, false, true).timeout
-		waited += 0.05
-	await get_tree().process_frame
-	await get_tree().process_frame
-
-	_check("the animation finished", screen.fx_layer.is_busy(), false)
-	_check("damage landed after impact", foe.hp < hp_before, true)
-	_check("the card left the hand", c.hand.size() < hand_before, true)
-	_check("the hand is playable again", screen._busy, false)
 
 
 ## The prompt is modal, but the hand fans itself with z_index, and z_index beats
