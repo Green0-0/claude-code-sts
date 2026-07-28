@@ -1,0 +1,9 @@
+# Godot 4 editor / import cache
+.godot/
+# Machine-local Claude Code permissions
+.claude/settings.local.json
+# Exported builds
+build/
+*.exe
+*.pck
+*.zip

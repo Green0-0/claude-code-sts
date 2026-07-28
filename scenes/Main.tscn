@@ -1,0 +1,916 @@
+[gd_scene load_steps=11 format=3]
+
+[ext_resource type="Script" path="res://scripts/ui/Main.gd" id="1_main"]
+[ext_resource type="Script" path="res://scripts/ui/TitleScreen.gd" id="2_title"]
+[ext_resource type="Script" path="res://scripts/ui/MapScreen.gd" id="3_map"]
+[ext_resource type="Script" path="res://scripts/ui/CombatScreen.gd" id="4_combat"]
+[ext_resource type="Script" path="res://scripts/ui/RewardScreen.gd" id="5_reward"]
+[ext_resource type="Script" path="res://scripts/ui/ShopScreen.gd" id="6_shop"]
+[ext_resource type="Script" path="res://scripts/ui/RestScreen.gd" id="7_rest"]
+[ext_resource type="Script" path="res://scripts/ui/EventScreen.gd" id="8_event"]
+[ext_resource type="Script" path="res://scripts/ui/CardPicker.gd" id="9_picker"]
+[ext_resource type="Script" path="res://scripts/ui/TopBar.gd" id="10_topbar"]
+
+[node name="Main" type="Node"]
+script = ExtResource("1_main")
+
+[node name="Background" type="ColorRect" parent="."]
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+color = Color(0.0705882, 0.0705882, 0.0980392, 1)
+
+[node name="Screens" type="Control" parent="."]
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+mouse_filter = 1
+
+[node name="TitleScreen" type="Control" parent="Screens"]
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+mouse_filter = 1
+script = ExtResource("2_title")
+
+[node name="Panel" type="Panel" parent="Screens/TitleScreen"]
+layout_mode = 1
+anchor_left = 0.5
+anchor_top = 0.5
+anchor_right = 0.5
+anchor_bottom = 0.5
+offset_left = -330.0
+offset_top = -270.0
+offset_right = 330.0
+offset_bottom = 270.0
+
+[node name="TitleLabel" type="Label" parent="Screens/TitleScreen/Panel"]
+layout_mode = 0
+offset_left = 20.0
+offset_top = 26.0
+offset_right = 640.0
+offset_bottom = 90.0
+theme_override_colors/font_color = Color(0.945098, 0.827451, 0.4, 1)
+theme_override_font_sizes/font_size = 46
+text = "SPIRE"
+horizontal_alignment = 1
+vertical_alignment = 1
+
+[node name="SubtitleLabel" type="Label" parent="Screens/TitleScreen/Panel"]
+layout_mode = 0
+offset_left = 20.0
+offset_top = 92.0
+offset_right = 640.0
+offset_bottom = 120.0
+theme_override_colors/font_color = Color(0.72, 0.72, 0.78, 1)
+theme_override_font_sizes/font_size = 15
+text = "A deck-building climb. Choose your fighter."
+horizontal_alignment = 1
+vertical_alignment = 1
+
+[node name="Choices" type="HBoxContainer" parent="Screens/TitleScreen/Panel"]
+layout_mode = 0
+offset_left = 80.0
+offset_top = 150.0
+offset_right = 580.0
+offset_bottom = 216.0
+theme_override_constants/separation = 30
+alignment = 1
+
+[node name="IroncladButton" type="Button" parent="Screens/TitleScreen/Panel/Choices"]
+custom_minimum_size = Vector2(210, 62)
+layout_mode = 2
+theme_override_font_sizes/font_size = 20
+text = "The Ironclad"
+
+[node name="SilentButton" type="Button" parent="Screens/TitleScreen/Panel/Choices"]
+custom_minimum_size = Vector2(210, 62)
+layout_mode = 2
+theme_override_font_sizes/font_size = 20
+text = "The Silent"
+
+[node name="BlurbLabel" type="Label" parent="Screens/TitleScreen/Panel"]
+layout_mode = 0
+offset_left = 50.0
+offset_top = 230.0
+offset_right = 610.0
+offset_bottom = 310.0
+theme_override_font_sizes/font_size = 15
+text = "..."
+horizontal_alignment = 1
+vertical_alignment = 1
+autowrap_mode = 3
+
+[node name="SeedRow" type="HBoxContainer" parent="Screens/TitleScreen/Panel"]
+layout_mode = 0
+offset_left = 80.0
+offset_top = 326.0
+offset_right = 580.0
+offset_bottom = 366.0
+theme_override_constants/separation = 12
+alignment = 1
+
+[node name="SeedLabel" type="Label" parent="Screens/TitleScreen/Panel/SeedRow"]
+layout_mode = 2
+theme_override_font_sizes/font_size = 14
+text = "Seed"
+vertical_alignment = 1
+
+[node name="SeedInput" type="LineEdit" parent="Screens/TitleScreen/Panel/SeedRow"]
+custom_minimum_size = Vector2(150, 34)
+layout_mode = 2
+placeholder_text = "random"
+
+[node name="AscLabel" type="Label" parent="Screens/TitleScreen/Panel/SeedRow"]
+layout_mode = 2
+theme_override_font_sizes/font_size = 14
+text = "Ascension"
+vertical_alignment = 1
+
+[node name="AscensionSpin" type="SpinBox" parent="Screens/TitleScreen/Panel/SeedRow"]
+custom_minimum_size = Vector2(90, 34)
+layout_mode = 2
+max_value = 20.0
+
+[node name="ContinueButton" type="Button" parent="Screens/TitleScreen/Panel"]
+layout_mode = 0
+offset_left = 215.0
+offset_top = 382.0
+offset_right = 445.0
+offset_bottom = 424.0
+theme_override_font_sizes/font_size = 17
+text = "Continue Run"
+
+[node name="QuitButton" type="Button" parent="Screens/TitleScreen/Panel"]
+layout_mode = 0
+offset_left = 215.0
+offset_top = 434.0
+offset_right = 445.0
+offset_bottom = 476.0
+theme_override_font_sizes/font_size = 17
+text = "Quit"
+
+[node name="HelpLabel" type="Label" parent="Screens/TitleScreen/Panel"]
+layout_mode = 0
+offset_left = 20.0
+offset_top = 486.0
+offset_right = 640.0
+offset_bottom = 528.0
+theme_override_colors/font_color = Color(0.6, 0.6, 0.66, 1)
+theme_override_font_sizes/font_size = 12
+text = "Drag a card upward to play it, or click it then click a target. 1-9 selects, E ends the turn."
+horizontal_alignment = 1
+vertical_alignment = 1
+autowrap_mode = 3
+
+[node name="MapScreen" type="Control" parent="Screens"]
+visible = false
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+mouse_filter = 1
+script = ExtResource("3_map")
+
+[node name="ActLabel" type="Label" parent="Screens/MapScreen"]
+layout_mode = 0
+offset_left = 24.0
+offset_top = 52.0
+offset_right = 420.0
+offset_bottom = 84.0
+theme_override_colors/font_color = Color(0.945098, 0.827451, 0.4, 1)
+theme_override_font_sizes/font_size = 22
+text = "Act 1"
+vertical_alignment = 1
+
+[node name="HintLabel" type="Label" parent="Screens/MapScreen"]
+layout_mode = 1
+anchor_left = 1.0
+anchor_right = 1.0
+offset_left = -400.0
+offset_top = 52.0
+offset_right = -24.0
+offset_bottom = 84.0
+grow_horizontal = 0
+theme_override_font_sizes/font_size = 16
+text = "Choose your path."
+horizontal_alignment = 2
+vertical_alignment = 1
+
+[node name="Scroll" type="ScrollContainer" parent="Screens/MapScreen"]
+layout_mode = 1
+anchor_right = 1.0
+anchor_bottom = 1.0
+offset_left = 24.0
+offset_top = 92.0
+offset_right = -24.0
+offset_bottom = -16.0
+grow_horizontal = 2
+grow_vertical = 2
+horizontal_scroll_mode = 2
+
+[node name="Canvas" type="Control" parent="Screens/MapScreen/Scroll"]
+custom_minimum_size = Vector2(1200, 1600)
+layout_mode = 2
+mouse_filter = 1
+
+[node name="CombatScreen" type="Control" parent="Screens"]
+visible = false
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+mouse_filter = 1
+script = ExtResource("4_combat")
+
+[node name="LogPanel" type="Panel" parent="Screens/CombatScreen"]
+layout_mode = 0
+offset_left = 16.0
+offset_top = 52.0
+offset_right = 316.0
+offset_bottom = 198.0
+mouse_filter = 1
+
+[node name="CombatLog" type="RichTextLabel" parent="Screens/CombatScreen/LogPanel"]
+layout_mode = 1
+anchor_right = 1.0
+anchor_bottom = 1.0
+offset_left = 8.0
+offset_top = 6.0
+offset_right = -8.0
+offset_bottom = -6.0
+grow_horizontal = 2
+grow_vertical = 2
+theme_override_font_sizes/normal_font_size = 12
+bbcode_enabled = true
+scroll_following = true
+mouse_filter = 2
+
+[node name="Piles" type="HBoxContainer" parent="Screens/CombatScreen"]
+layout_mode = 0
+offset_left = 16.0
+offset_top = 204.0
+offset_right = 316.0
+offset_bottom = 238.0
+theme_override_constants/separation = 6
+
+[node name="DrawButton" type="Button" parent="Screens/CombatScreen/Piles"]
+custom_minimum_size = Vector2(96, 32)
+layout_mode = 2
+theme_override_font_sizes/font_size = 13
+text = "Draw 0"
+
+[node name="DiscardButton" type="Button" parent="Screens/CombatScreen/Piles"]
+custom_minimum_size = Vector2(96, 32)
+layout_mode = 2
+theme_override_font_sizes/font_size = 13
+text = "Discard 0"
+
+[node name="ExhaustButton" type="Button" parent="Screens/CombatScreen/Piles"]
+custom_minimum_size = Vector2(96, 32)
+layout_mode = 2
+theme_override_font_sizes/font_size = 13
+text = "Exhaust 0"
+
+[node name="PlayerPanel" type="Panel" parent="Screens/CombatScreen"]
+layout_mode = 0
+offset_left = 16.0
+offset_top = 248.0
+offset_right = 316.0
+offset_bottom = 432.0
+mouse_filter = 1
+
+[node name="NameLabel" type="Label" parent="Screens/CombatScreen/PlayerPanel"]
+layout_mode = 0
+offset_left = 10.0
+offset_top = 10.0
+offset_right = 290.0
+offset_bottom = 44.0
+theme_override_font_sizes/font_size = 19
+text = "The Ironclad"
+horizontal_alignment = 1
+vertical_alignment = 1
+
+[node name="HpBar" type="ProgressBar" parent="Screens/CombatScreen/PlayerPanel"]
+layout_mode = 0
+offset_left = 20.0
+offset_top = 52.0
+offset_right = 280.0
+offset_bottom = 80.0
+max_value = 80.0
+value = 80.0
+show_percentage = false
+
+[node name="HpLabel" type="Label" parent="Screens/CombatScreen/PlayerPanel/HpBar"]
+layout_mode = 1
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+theme_override_colors/font_outline_color = Color(0, 0, 0, 1)
+theme_override_constants/outline_size = 3
+theme_override_font_sizes/font_size = 14
+text = "80 / 80"
+horizontal_alignment = 1
+vertical_alignment = 1
+
+[node name="BlockLabel" type="Label" parent="Screens/CombatScreen/PlayerPanel"]
+layout_mode = 0
+offset_left = 20.0
+offset_top = 86.0
+offset_right = 280.0
+offset_bottom = 114.0
+theme_override_colors/font_color = Color(0.65, 0.82, 1, 1)
+theme_override_font_sizes/font_size = 18
+text = "🛡 0"
+horizontal_alignment = 1
+vertical_alignment = 1
+
+[node name="StatusBox" type="HBoxContainer" parent="Screens/CombatScreen/PlayerPanel"]
+layout_mode = 0
+offset_left = 10.0
+offset_top = 118.0
+offset_right = 290.0
+offset_bottom = 176.0
+theme_override_constants/separation = 8
+alignment = 1
+
+[node name="EnemyArea" type="Control" parent="Screens/CombatScreen"]
+layout_mode = 1
+anchor_right = 1.0
+offset_left = 350.0
+offset_top = 62.0
+offset_right = -30.0
+offset_bottom = 404.0
+grow_horizontal = 2
+mouse_filter = 1
+
+[node name="PromptLabel" type="Label" parent="Screens/CombatScreen"]
+visible = false
+layout_mode = 1
+anchor_right = 1.0
+offset_top = 404.0
+offset_bottom = 432.0
+grow_horizontal = 2
+theme_override_colors/font_color = Color(1, 0.898039, 0.541176, 1)
+theme_override_colors/font_outline_color = Color(0, 0, 0, 1)
+theme_override_constants/outline_size = 4
+theme_override_font_sizes/font_size = 17
+text = "Choose a target"
+horizontal_alignment = 1
+vertical_alignment = 1
+mouse_filter = 2
+
+[node name="HandArea" type="Control" parent="Screens/CombatScreen"]
+layout_mode = 1
+anchor_right = 1.0
+anchor_bottom = 1.0
+offset_top = 442.0
+grow_horizontal = 2
+grow_vertical = 2
+mouse_filter = 1
+
+[node name="TurnLabel" type="Label" parent="Screens/CombatScreen"]
+layout_mode = 0
+offset_left = 18.0
+offset_top = 452.0
+offset_right = 130.0
+offset_bottom = 476.0
+theme_override_font_sizes/font_size = 15
+text = "Turn 1"
+vertical_alignment = 1
+mouse_filter = 2
+
+[node name="EnergyOrb" type="Panel" parent="Screens/CombatScreen"]
+layout_mode = 0
+offset_left = 20.0
+offset_top = 484.0
+offset_right = 108.0
+offset_bottom = 572.0
+mouse_filter = 1
+
+[node name="EnergyLabel" type="Label" parent="Screens/CombatScreen/EnergyOrb"]
+layout_mode = 1
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+theme_override_colors/font_color = Color(1, 0.898039, 0.478431, 1)
+theme_override_font_sizes/font_size = 24
+text = "3/3"
+horizontal_alignment = 1
+vertical_alignment = 1
+mouse_filter = 2
+
+[node name="EndTurnButton" type="Button" parent="Screens/CombatScreen"]
+layout_mode = 1
+anchor_left = 1.0
+anchor_right = 1.0
+offset_left = -150.0
+offset_top = 490.0
+offset_right = -20.0
+offset_bottom = 556.0
+grow_horizontal = 0
+theme_override_font_sizes/font_size = 17
+text = "End Turn"
+
+[node name="TargetLine" type="Line2D" parent="Screens/CombatScreen"]
+width = 4.0
+default_color = Color(1, 0.85, 0.4, 0.85)
+
+[node name="FloatLayer" type="Control" parent="Screens/CombatScreen"]
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+mouse_filter = 2
+
+[node name="RewardScreen" type="Control" parent="Screens"]
+visible = false
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+mouse_filter = 1
+script = ExtResource("5_reward")
+
+[node name="TitleLabel" type="Label" parent="Screens/RewardScreen"]
+layout_mode = 1
+anchor_right = 1.0
+offset_top = 104.0
+offset_bottom = 154.0
+grow_horizontal = 2
+theme_override_colors/font_color = Color(0.945098, 0.827451, 0.4, 1)
+theme_override_font_sizes/font_size = 34
+text = "Victory!"
+horizontal_alignment = 1
+vertical_alignment = 1
+
+[node name="Rows" type="VBoxContainer" parent="Screens/RewardScreen"]
+layout_mode = 1
+anchor_left = 0.5
+anchor_top = 0.5
+anchor_right = 0.5
+anchor_bottom = 0.5
+offset_left = -260.0
+offset_top = -150.0
+offset_right = 260.0
+offset_bottom = 150.0
+theme_override_constants/separation = 12
+alignment = 1
+
+[node name="ProceedButton" type="Button" parent="Screens/RewardScreen"]
+layout_mode = 1
+anchor_left = 0.5
+anchor_top = 1.0
+anchor_right = 0.5
+anchor_bottom = 1.0
+offset_left = -120.0
+offset_top = -110.0
+offset_right = 120.0
+offset_bottom = -56.0
+grow_horizontal = 2
+grow_vertical = 0
+theme_override_font_sizes/font_size = 19
+text = "Proceed"
+
+[node name="ShopScreen" type="Control" parent="Screens"]
+visible = false
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+mouse_filter = 1
+script = ExtResource("6_shop")
+
+[node name="GoldLabel" type="Label" parent="Screens/ShopScreen"]
+layout_mode = 0
+offset_left = 24.0
+offset_top = 52.0
+offset_right = 340.0
+offset_bottom = 84.0
+theme_override_colors/font_color = Color(0.945098, 0.827451, 0.4, 1)
+theme_override_font_sizes/font_size = 22
+text = "💰 0 Gold"
+vertical_alignment = 1
+
+[node name="Notice" type="Label" parent="Screens/ShopScreen"]
+layout_mode = 1
+anchor_left = 1.0
+anchor_right = 1.0
+offset_left = -600.0
+offset_top = 52.0
+offset_right = -24.0
+offset_bottom = 84.0
+grow_horizontal = 0
+theme_override_colors/font_color = Color(0.65, 0.9, 0.7, 1)
+theme_override_font_sizes/font_size = 15
+horizontal_alignment = 2
+vertical_alignment = 1
+
+[node name="Scroll" type="ScrollContainer" parent="Screens/ShopScreen"]
+layout_mode = 1
+anchor_right = 1.0
+anchor_bottom = 1.0
+offset_left = 24.0
+offset_top = 90.0
+offset_right = -24.0
+offset_bottom = -80.0
+grow_horizontal = 2
+grow_vertical = 2
+
+[node name="Content" type="VBoxContainer" parent="Screens/ShopScreen/Scroll"]
+layout_mode = 2
+theme_override_constants/separation = 16
+
+[node name="CardRow" type="HBoxContainer" parent="Screens/ShopScreen/Scroll/Content"]
+layout_mode = 2
+theme_override_constants/separation = 10
+
+[node name="RelicRow" type="HBoxContainer" parent="Screens/ShopScreen/Scroll/Content"]
+layout_mode = 2
+theme_override_constants/separation = 10
+
+[node name="PotionRow" type="HBoxContainer" parent="Screens/ShopScreen/Scroll/Content"]
+layout_mode = 2
+theme_override_constants/separation = 10
+
+[node name="Bottom" type="HBoxContainer" parent="Screens/ShopScreen"]
+layout_mode = 1
+anchor_top = 1.0
+anchor_bottom = 1.0
+offset_left = 24.0
+offset_top = -68.0
+offset_right = 700.0
+offset_bottom = -20.0
+grow_vertical = 0
+theme_override_constants/separation = 14
+
+[node name="RemoveButton" type="Button" parent="Screens/ShopScreen/Bottom"]
+custom_minimum_size = Vector2(280, 44)
+layout_mode = 2
+theme_override_font_sizes/font_size = 16
+text = "Remove a card"
+
+[node name="LeaveButton" type="Button" parent="Screens/ShopScreen/Bottom"]
+custom_minimum_size = Vector2(180, 44)
+layout_mode = 2
+theme_override_font_sizes/font_size = 16
+text = "Leave"
+
+[node name="RestScreen" type="Control" parent="Screens"]
+visible = false
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+mouse_filter = 1
+script = ExtResource("7_rest")
+
+[node name="TitleLabel" type="Label" parent="Screens/RestScreen"]
+layout_mode = 1
+anchor_right = 1.0
+offset_top = 100.0
+offset_bottom = 152.0
+grow_horizontal = 2
+theme_override_colors/font_color = Color(0.980392, 0.658824, 0.32, 1)
+theme_override_font_sizes/font_size = 34
+text = "A Campfire"
+horizontal_alignment = 1
+vertical_alignment = 1
+
+[node name="StatusLabel" type="Label" parent="Screens/RestScreen"]
+layout_mode = 1
+anchor_right = 1.0
+offset_top = 160.0
+offset_bottom = 196.0
+grow_horizontal = 2
+theme_override_font_sizes/font_size = 17
+text = "You are weary."
+horizontal_alignment = 1
+vertical_alignment = 1
+
+[node name="Options" type="VBoxContainer" parent="Screens/RestScreen"]
+layout_mode = 1
+anchor_left = 0.5
+anchor_top = 0.5
+anchor_right = 0.5
+anchor_bottom = 0.5
+offset_left = -190.0
+offset_top = -80.0
+offset_right = 190.0
+offset_bottom = 110.0
+theme_override_constants/separation = 16
+alignment = 1
+
+[node name="RestButton" type="Button" parent="Screens/RestScreen/Options"]
+custom_minimum_size = Vector2(380, 56)
+layout_mode = 2
+theme_override_font_sizes/font_size = 18
+text = "Rest"
+
+[node name="SmithButton" type="Button" parent="Screens/RestScreen/Options"]
+custom_minimum_size = Vector2(380, 56)
+layout_mode = 2
+theme_override_font_sizes/font_size = 18
+text = "Smith — upgrade a card"
+
+[node name="LeaveButton" type="Button" parent="Screens/RestScreen/Options"]
+custom_minimum_size = Vector2(380, 56)
+layout_mode = 2
+theme_override_font_sizes/font_size = 18
+text = "Leave"
+
+[node name="EventScreen" type="Control" parent="Screens"]
+visible = false
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+mouse_filter = 1
+script = ExtResource("8_event")
+
+[node name="NameLabel" type="Label" parent="Screens/EventScreen"]
+layout_mode = 1
+anchor_right = 1.0
+offset_top = 80.0
+offset_bottom = 130.0
+grow_horizontal = 2
+theme_override_colors/font_color = Color(0.68, 0.8, 0.55, 1)
+theme_override_font_sizes/font_size = 32
+text = "An Encounter"
+horizontal_alignment = 1
+vertical_alignment = 1
+
+[node name="TextLabel" type="RichTextLabel" parent="Screens/EventScreen"]
+layout_mode = 1
+anchor_left = 0.5
+anchor_right = 0.5
+offset_left = -400.0
+offset_top = 142.0
+offset_right = 400.0
+offset_bottom = 230.0
+grow_horizontal = 2
+theme_override_font_sizes/normal_font_size = 16
+bbcode_enabled = true
+scroll_active = false
+
+[node name="Options" type="VBoxContainer" parent="Screens/EventScreen"]
+layout_mode = 1
+anchor_left = 0.5
+anchor_right = 0.5
+offset_left = -310.0
+offset_top = 250.0
+offset_right = 310.0
+offset_bottom = 470.0
+grow_horizontal = 2
+theme_override_constants/separation = 12
+alignment = 1
+
+[node name="ResultLabel" type="Label" parent="Screens/EventScreen"]
+layout_mode = 1
+anchor_right = 1.0
+offset_top = 490.0
+offset_bottom = 546.0
+grow_horizontal = 2
+theme_override_colors/font_color = Color(0.945098, 0.827451, 0.4, 1)
+theme_override_font_sizes/font_size = 18
+horizontal_alignment = 1
+vertical_alignment = 1
+autowrap_mode = 3
+
+[node name="ContinueButton" type="Button" parent="Screens/EventScreen"]
+visible = false
+layout_mode = 1
+anchor_left = 0.5
+anchor_top = 1.0
+anchor_right = 0.5
+anchor_bottom = 1.0
+offset_left = -110.0
+offset_top = -110.0
+offset_right = 110.0
+offset_bottom = -58.0
+grow_horizontal = 2
+grow_vertical = 0
+theme_override_font_sizes/font_size = 18
+text = "Continue"
+
+[node name="GameOverScreen" type="Control" parent="Screens"]
+visible = false
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+mouse_filter = 1
+
+[node name="TitleLabel" type="Label" parent="Screens/GameOverScreen"]
+layout_mode = 1
+anchor_right = 1.0
+offset_top = 180.0
+offset_bottom = 250.0
+grow_horizontal = 2
+theme_override_font_sizes/font_size = 48
+text = "YOU DIED"
+horizontal_alignment = 1
+vertical_alignment = 1
+
+[node name="StatsLabel" type="Label" parent="Screens/GameOverScreen"]
+layout_mode = 1
+anchor_right = 1.0
+offset_top = 270.0
+offset_bottom = 420.0
+grow_horizontal = 2
+theme_override_font_sizes/font_size = 18
+horizontal_alignment = 1
+vertical_alignment = 1
+
+[node name="RestartButton" type="Button" parent="Screens/GameOverScreen"]
+layout_mode = 1
+anchor_left = 0.5
+anchor_right = 0.5
+offset_left = -130.0
+offset_top = 460.0
+offset_right = 130.0
+offset_bottom = 512.0
+grow_horizontal = 2
+theme_override_font_sizes/font_size = 19
+text = "Back to Title"
+
+[node name="TopBar" type="Panel" parent="."]
+anchor_right = 1.0
+offset_bottom = 44.0
+grow_horizontal = 2
+script = ExtResource("10_topbar")
+
+[node name="Bar" type="HBoxContainer" parent="TopBar"]
+layout_mode = 1
+anchor_right = 1.0
+anchor_bottom = 1.0
+offset_left = 14.0
+offset_top = 5.0
+offset_right = -14.0
+offset_bottom = -5.0
+grow_horizontal = 2
+grow_vertical = 2
+theme_override_constants/separation = 18
+
+[node name="HpLabel" type="Label" parent="TopBar/Bar"]
+custom_minimum_size = Vector2(130, 0)
+layout_mode = 2
+theme_override_font_sizes/font_size = 16
+text = "❤ 80 / 80"
+vertical_alignment = 1
+
+[node name="GoldLabel" type="Label" parent="TopBar/Bar"]
+custom_minimum_size = Vector2(90, 0)
+layout_mode = 2
+theme_override_colors/font_color = Color(0.945098, 0.827451, 0.4, 1)
+theme_override_font_sizes/font_size = 16
+text = "💰 99"
+vertical_alignment = 1
+
+[node name="FloorLabel" type="Label" parent="TopBar/Bar"]
+custom_minimum_size = Vector2(150, 0)
+layout_mode = 2
+theme_override_font_sizes/font_size = 16
+text = "Act 1 · Floor 0"
+vertical_alignment = 1
+
+[node name="DeckButton" type="Button" parent="TopBar/Bar"]
+custom_minimum_size = Vector2(110, 0)
+layout_mode = 2
+theme_override_font_sizes/font_size = 14
+text = "Deck (10)"
+
+[node name="RelicBox" type="HBoxContainer" parent="TopBar/Bar"]
+layout_mode = 2
+size_flags_horizontal = 3
+theme_override_constants/separation = 6
+
+[node name="PotionBox" type="HBoxContainer" parent="TopBar/Bar"]
+layout_mode = 2
+theme_override_constants/separation = 6
+
+[node name="MenuButton" type="Button" parent="TopBar/Bar"]
+custom_minimum_size = Vector2(80, 0)
+layout_mode = 2
+theme_override_font_sizes/font_size = 14
+text = "Menu"
+
+[node name="CardPicker" type="Control" parent="."]
+visible = false
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+script = ExtResource("9_picker")
+
+[node name="Dim" type="ColorRect" parent="CardPicker"]
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+color = Color(0, 0, 0, 0.933333)
+
+[node name="Panel" type="Panel" parent="CardPicker"]
+layout_mode = 1
+anchor_right = 1.0
+anchor_bottom = 1.0
+offset_left = 40.0
+offset_top = 40.0
+offset_right = -40.0
+offset_bottom = -40.0
+grow_horizontal = 2
+grow_vertical = 2
+
+[node name="TitleLabel" type="Label" parent="CardPicker/Panel"]
+layout_mode = 1
+anchor_right = 1.0
+offset_top = 12.0
+offset_bottom = 48.0
+grow_horizontal = 2
+theme_override_colors/font_color = Color(0.945098, 0.827451, 0.4, 1)
+theme_override_font_sizes/font_size = 24
+text = "Choose"
+horizontal_alignment = 1
+vertical_alignment = 1
+
+[node name="HintLabel" type="Label" parent="CardPicker/Panel"]
+layout_mode = 1
+anchor_right = 1.0
+offset_top = 50.0
+offset_bottom = 74.0
+grow_horizontal = 2
+theme_override_font_sizes/font_size = 14
+horizontal_alignment = 1
+vertical_alignment = 1
+
+[node name="Scroll" type="ScrollContainer" parent="CardPicker/Panel"]
+layout_mode = 1
+anchor_right = 1.0
+anchor_bottom = 1.0
+offset_left = 20.0
+offset_top = 80.0
+offset_right = -20.0
+offset_bottom = -70.0
+grow_horizontal = 2
+grow_vertical = 2
+
+[node name="CenterBox" type="HBoxContainer" parent="CardPicker/Panel/Scroll"]
+layout_mode = 2
+size_flags_horizontal = 3
+alignment = 1
+
+[node name="Grid" type="GridContainer" parent="CardPicker/Panel/Scroll/CenterBox"]
+layout_mode = 2
+size_flags_vertical = 0
+theme_override_constants/h_separation = 14
+theme_override_constants/v_separation = 14
+columns = 6
+
+[node name="Buttons" type="HBoxContainer" parent="CardPicker/Panel"]
+layout_mode = 1
+anchor_left = 0.5
+anchor_top = 1.0
+anchor_right = 0.5
+anchor_bottom = 1.0
+offset_left = -200.0
+offset_top = -58.0
+offset_right = 200.0
+offset_bottom = -14.0
+grow_horizontal = 2
+grow_vertical = 0
+theme_override_constants/separation = 20
+alignment = 1
+
+[node name="ConfirmButton" type="Button" parent="CardPicker/Panel/Buttons"]
+custom_minimum_size = Vector2(160, 42)
+layout_mode = 2
+theme_override_font_sizes/font_size = 17
+text = "Confirm"
+
+[node name="CancelButton" type="Button" parent="CardPicker/Panel/Buttons"]
+custom_minimum_size = Vector2(160, 42)
+layout_mode = 2
+theme_override_font_sizes/font_size = 17
+text = "Cancel"
+
+[node name="Toast" type="Label" parent="."]
+visible = false
+anchor_left = 0.5
+anchor_right = 0.5
+offset_left = -430.0
+offset_top = 48.0
+offset_right = 430.0
+offset_bottom = 80.0
+grow_horizontal = 2
+theme_override_colors/font_color = Color(1, 0.898039, 0.541176, 1)
+theme_override_colors/font_outline_color = Color(0, 0, 0, 1)
+theme_override_constants/outline_size = 5
+theme_override_font_sizes/font_size = 19
+horizontal_alignment = 1
+vertical_alignment = 1
+mouse_filter = 2
