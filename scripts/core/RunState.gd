@@ -601,6 +601,10 @@ func enter_node(idx: int) -> void:
 func acts_in_run() -> int:
 	return POKEMON_ACTS if is_pokemon_run() else ACTS
 
+func act_progress() -> float:
+	var floors_in_act := MapGen.ROWS + 1  # Number of floors per act
+	var floor_in_act := floor_num % floors_in_act
+	return clampf(float(floor_in_act) / float(floors_in_act), 0.0, 1.0)
 
 func total_floors() -> int:
 	return acts_in_run() * (MapGen.ROWS + 1)
@@ -647,14 +651,15 @@ func advance_act() -> bool:
 
 # ─────────────────────────────────── Encounters ───────────────────────────────
 func encounter_for_node(node_type: String) -> Array:
+	var progress := progress()
 	var group: Array = []
 	if node_type == "boss":
-		group = EncounterLibrary.boss_for(act, rng)
+		group = EncounterLibrary.boss_for(progress, rng)
 	elif node_type == "elite":
-		group = EncounterLibrary.pick(act, "elite", rng, recent_encounters)
+		group = EncounterLibrary.pick(progress, "elite", rng, recent_encounters)
 	else:
 		var early := visited_nodes.size() <= 3 and act == 1
-		group = EncounterLibrary.pick(act, "weak" if early else "strong", rng, recent_encounters)
+		group = EncounterLibrary.pick(progress, "weak" if early else "strong", rng, recent_encounters)
 	last_encounter_role = node_type
 	for id in group:
 		var mon := PokeMobs.mon_for(String(id))

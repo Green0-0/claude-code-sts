@@ -93,13 +93,13 @@ static func pick(progress: float, kind: String, rng: RandomNumberGenerator,
 
 	# A few attempts to avoid an immediate repeat, then take what we are given.
 	var index := -1
+	var candidates: Array = []
 	for attempt in range(6):
 		index = _pick_index(progress, kind, rng)
 		if index < 0:
 			return []
 		var candidate := PokeMobs.enemy_id(String(PokeData.mon_at(index)["name"]), role)
-		if not recent.has(candidate):
-			break
+		candidates.append(candidate)
 	if index < 0:
 		return []
 
@@ -108,15 +108,28 @@ static func pick(progress: float, kind: String, rng: RandomNumberGenerator,
 	var count := PokeBalance.group_size(mon, kind)
 
 	var out: Array = []
+	out.append(id)
 	for i in range(count):
-		out.append(id)
+		var random_candidate = candidates[rng.randi_range(0, candidates.size() - 1)]
+		print(Run.act_progress())
+		if rng.randf() < Run.act_progress():
+			out.append(random_candidate)
 	# Mixed packs read better than three clones, so a second species joins the
 	# weaker groups when there is room for one.
-	if count >= 2 and kind != "boss" and rng.randf() < 0.5:
-		var other := _pick_index(progress, kind, rng)
-		if other >= 0 and other != index:
-			out[out.size() - 1] = PokeMobs.enemy_id(
-					String(PokeData.mon_at(other)["name"]), role)
+	
+	var attempts := rng.randi_range(0, 34)
+	while attempts > 0:
+		attempts -= 1
+		if rng.randf() >= progress:
+			continue
+		
+		if count >= 2 and kind != "boss":
+			var other := _pick_index(progress, kind, rng)
+			if other >= 0 and other != index:
+				out.append(PokeMobs.enemy_id(
+					String(PokeData.mon_at(other)["name"]), role))
+				# Optional: break early if you only need one successful result?
+				# break
 	return out
 
 

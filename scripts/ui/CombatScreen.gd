@@ -535,7 +535,9 @@ func _on_enemy_clicked(view: EnemyView) -> void:
 	if combat == null or combat.phase != "player":
 		return
 	if selected_view != null and selected_view.card.needs_target():
-		_try_play(selected_view, view.index)
+		var idx = _living_index(view)  # Get the current dynamic index
+		if idx != -1:
+			_try_play(selected_view, idx)
 
 
 func _on_enemy_hover(view: EnemyView, inside: bool) -> void:
@@ -622,7 +624,7 @@ func _try_play(view: CardView, target_index: int) -> void:
 	view.set_selected(false)
 	if target_index >= 0 and target_index < enemy_views.size():
 		for v in enemy_views:
-			if v.index == target_index:
+			if _living_index(v) == target_index:
 				v.flash()
 	if not CardAnim.enabled:
 		combat.play_card(view.card, target_index)
@@ -634,6 +636,13 @@ func _try_play(view: CardView, target_index: int) -> void:
 	var card := view.card
 	var kind := _anim_kind_for(card)
 	var target_view := _view_for_index(target_index)
+	
+	if target_index >= 0 and target_index < enemy_views.size():
+		for v in enemy_views:
+			if _living_index(v) == target_index:
+				target_view = v
+	
+	
 	var target_rect := _target_rect(kind, target_view)
 	var from_pos := _to_local(view.get_global_position())
 	view.visible = false

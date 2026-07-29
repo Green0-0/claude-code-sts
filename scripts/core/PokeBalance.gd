@@ -225,7 +225,7 @@ static func card_type(mv: Dictionary) -> String:
 ## climbs from there. By the end it is fielding wild legendaries. Progress is
 ## 0 at the first floor and 1 at the last, so the slope stretches automatically
 ## if the run length changes.
-const BST_CAP_START := 250.0
+const BST_CAP_START := 200.0
 const BST_CAP_END := 720.0
 
 ## How far above the running cap each encounter kind aims. Elites and bosses are

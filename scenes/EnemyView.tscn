@@ -1,16 +1,17 @@
-[gd_scene load_steps=2 format=3]
+[gd_scene format=3 uid="uid://bi6r1pooj8h5d"]
 
-[ext_resource type="Script" path="res://scripts/ui/EnemyView.gd" id="1_enemyview"]
+[ext_resource type="Script" uid="uid://clrhy67u01iik" path="res://scripts/ui/EnemyView.gd" id="1_enemyview"]
 
-[node name="EnemyView" type="Control"]
+[node name="EnemyView" type="Control" unique_id=1395432906]
 custom_minimum_size = Vector2(190, 250)
+layout_mode = 3
+anchors_preset = 0
 offset_right = 190.0
 offset_bottom = 250.0
 pivot_offset = Vector2(95, 125)
-mouse_filter = 0
 script = ExtResource("1_enemyview")
 
-[node name="IntentLabel" type="Label" parent="."]
+[node name="IntentLabel" type="Label" parent="." unique_id=2040890371]
 layout_mode = 0
 offset_right = 190.0
 offset_bottom = 34.0
@@ -20,9 +21,8 @@ theme_override_font_sizes/font_size = 26
 text = "⚔"
 horizontal_alignment = 1
 vertical_alignment = 1
-mouse_filter = 2
 
-[node name="IntentDetail" type="Label" parent="."]
+[node name="IntentDetail" type="Label" parent="." unique_id=388552927]
 layout_mode = 0
 offset_top = 32.0
 offset_right = 190.0
@@ -33,9 +33,8 @@ theme_override_font_sizes/font_size = 17
 text = "11"
 horizontal_alignment = 1
 vertical_alignment = 1
-mouse_filter = 2
 
-[node name="Body" type="Panel" parent="."]
+[node name="Body" type="Panel" parent="." unique_id=1807849129]
 layout_mode = 0
 offset_left = 8.0
 offset_top = 58.0
@@ -43,8 +42,9 @@ offset_right = 182.0
 offset_bottom = 190.0
 mouse_filter = 2
 
-[node name="Sprite" type="TextureRect" parent="Body"]
+[node name="Sprite" type="TextureRect" parent="Body" unique_id=19840261]
 layout_mode = 1
+anchors_preset = 15
 anchor_right = 1.0
 anchor_bottom = 1.0
 offset_left = 4.0
@@ -53,12 +53,13 @@ offset_right = -4.0
 offset_bottom = -38.0
 grow_horizontal = 2
 grow_vertical = 2
+mouse_filter = 2
 expand_mode = 1
 stretch_mode = 5
-mouse_filter = 2
 
-[node name="NameLabel" type="Label" parent="Body"]
+[node name="NameLabel" type="Label" parent="Body" unique_id=1265982125]
 layout_mode = 1
+anchors_preset = 12
 anchor_top = 1.0
 anchor_right = 1.0
 anchor_bottom = 1.0
@@ -66,28 +67,28 @@ offset_top = -42.0
 grow_horizontal = 2
 grow_vertical = 0
 theme_override_colors/font_outline_color = Color(0, 0, 0, 1)
+theme_override_constants/line_spacing = -1
 theme_override_constants/outline_size = 5
 theme_override_font_sizes/font_size = 14
-theme_override_constants/line_spacing = -1
 text = "Jaw Worm"
 horizontal_alignment = 1
 vertical_alignment = 2
 autowrap_mode = 3
-mouse_filter = 2
 
-[node name="HpBar" type="ProgressBar" parent="."]
+[node name="HpBar" type="ProgressBar" parent="." unique_id=1485219004]
 layout_mode = 0
 offset_left = 8.0
 offset_top = 195.0
 offset_right = 182.0
 offset_bottom = 217.0
+mouse_filter = 2
 max_value = 44.0
 value = 44.0
 show_percentage = false
-mouse_filter = 2
 
-[node name="HpLabel" type="Label" parent="HpBar"]
+[node name="HpLabel" type="Label" parent="HpBar" unique_id=1183971381]
 layout_mode = 1
+anchors_preset = 15
 anchor_right = 1.0
 anchor_bottom = 1.0
 grow_horizontal = 2
@@ -98,9 +99,8 @@ theme_override_font_sizes/font_size = 12
 text = "44 / 44"
 horizontal_alignment = 1
 vertical_alignment = 1
-mouse_filter = 2
 
-[node name="BlockLabel" type="Label" parent="."]
+[node name="BlockLabel" type="Label" parent="." unique_id=157303794]
 layout_mode = 0
 offset_left = 8.0
 offset_top = 218.0
@@ -113,18 +113,17 @@ theme_override_font_sizes/font_size = 14
 text = "🛡 0"
 horizontal_alignment = 1
 vertical_alignment = 1
-mouse_filter = 2
 
-[node name="StatusBox" type="HBoxContainer" parent="."]
+[node name="StatusBox" type="HBoxContainer" parent="." unique_id=1599096047]
 layout_mode = 0
 offset_left = 5.0
 offset_top = 230.0
 offset_right = 185.0
 offset_bottom = 250.0
-alignment = 1
 mouse_filter = 2
+alignment = 1
 
-[node name="TargetRing" type="Panel" parent="."]
+[node name="TargetRing" type="Panel" parent="." unique_id=713333387]
 layout_mode = 0
 offset_left = 2.0
 offset_top = 52.0
