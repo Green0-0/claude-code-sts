@@ -25,7 +25,7 @@ The main scene is `scenes/Main.tscn`.
 
 ```bash
 godot --headless -- --rules-test   # 69 assertions on the combat maths
-godot --headless -- --poke-test    # 220 assertions on the Pokémon layer
+godot --headless -- --poke-test    # 227 assertions on the Pokémon layer
 godot --headless -- --smoke        # one self-played run, prints a report
 godot --headless -- --smoke-deep   # 8 runs, immortal player, full 3-act coverage
 godot --headless -- --smoke-poke   # 8 self-played Pokémon runs
@@ -51,16 +51,26 @@ enemies and 103 cards exercised, zero errors.**
 
 `--smoke-poke` is the same harness playing Pokémon, rotating through a deliberate
 spread (a frail starter, a wall, a glass cannon, a legendary, and the degenerate
-learnsets — Abra, Magikarp, Ditto). Last verified run: **5 of 8 complete 3-act
-clears, 168 combats, 2326 cards played, 166 distinct species fought, zero
-errors.** It clears fewer runs than the Spire harness by design — see
-[difficulty](#difficulty-is-not-flat-by-design).
+learnsets — Abra, Magikarp, Ditto). Last verified run: **five complete four-act
+clears, 238 combats, 4 evolutions, party reaching level 41, zero errors** —
+including Magikarp, which used to die on the first floor and now evolves into
+Gyarados and finishes the run.
+
+One known hole: the eighth run (**Ditto**) does not terminate and the harness
+stops on its step limit. Ditto learns nothing but Transform, so its deck falls
+back to Struggle; paired with the harness's immortal player, a fight it cannot
+win in reasonable time never ends. A mortal player would simply lose. It is a
+harness artifact meeting the single most degenerate species, but it does mean the
+run never completes.
 
 **Run the suites one at a time.** Two of them fail spuriously against a busy
 machine, in ways that look like real bugs:
 
-* `--click-test` synthesizes mouse events and waits a frame between each, so a
-  `--smoke-*` run in the background starves it and hit-testing misses.
+* `--click-test` synthesizes mouse events, so a `--smoke-*` run in the background
+  starves it and hit-testing misses. It also waits for the UI to stop being busy
+  before each click (`_settle`) — under ATB the clock is pumped on a timer, so a
+  click fired immediately after the previous one can land while the engine is
+  still advancing and be swallowed. Without that wait the suite is flaky.
 * `--poke-test` exercises save/continue, and every suite shares the one
   `user://spire_save.json`. A concurrent `--smoke-*` overwrites it mid-test.
 
@@ -399,7 +409,7 @@ scripts/core/
   PokeEncounters.gd      BST-weighted encounter tables
 scripts/ui/PokemonSelect.gd    searchable dex picker
 scripts/ui/EvolutionScreen.gd  the evolution offer
-scripts/dev/PokeTest.gd       220 assertions over the whole layer
+scripts/dev/PokeTest.gd       227 assertions over the whole layer
 scripts/dev/Shot.gd           --poke-shots, one PNG per Pokémon-mode screen
 ```
 

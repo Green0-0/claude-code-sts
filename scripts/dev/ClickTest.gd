@@ -46,7 +46,39 @@ func _click_at(pos: Vector2) -> void:
 
 
 func _click_control(c: Control) -> void:
+	# The ATB pump and the card animations both run on timers, so a click fired
+	# the instant after the previous one can land while the UI is still busy and
+	# be swallowed. Let it settle first.
+	await _settle()
 	await _click_at(c.get_global_rect().get_center())
+
+
+## Waits for the combat screen to stop being busy, bounded so a genuinely stuck
+## UI still fails the test rather than hanging it.
+func _settle(frames: int = 180) -> void:
+	var cs = main.combat_screen
+	for i in range(frames):
+		if cs == null or not cs._busy:
+			return
+		await get_tree().process_frame
+
+
+## Waits until the engine is actually waiting on the player.
+##
+## Under ATB the UI pumps the clock on a timer, so "the player's turn" arrives a
+## few frames after end_turn() rather than immediately. Without this the test
+## races the pump and fails intermittently — clicking a card the engine has not
+## handed control back for yet.
+func _await_player_turn(frames: int = 240) -> bool:
+	var cs = main.combat_screen
+	for i in range(frames):
+		var c = cs.combat
+		if c == null or c.finished:
+			return false
+		if c.phase == "player" and not cs._busy and c.pending_choice.is_empty():
+			return true
+		await get_tree().process_frame
+	return false
 
 
 func _run() -> void:
@@ -128,6 +160,7 @@ func _run() -> void:
 func _test_prompt_draws_above_the_hand(c: Combat) -> void:
 	print("[click] --- prompt draws above the hand")
 	var picker = main.card_picker
+	await _await_player_turn()
 	var survivor := Card.create("survivor")
 	c.hand.append(survivor)
 	c.energy = 3
@@ -161,6 +194,7 @@ func _test_prompt_draws_above_the_hand(c: Combat) -> void:
 ## still holds pending_choice, which blocks every card and End Turn.
 func _test_escape_during_mandatory_choice(c: Combat) -> void:
 	print("[click] --- escape during a mandatory discard")
+	await _await_player_turn()
 	var survivor := Card.create("survivor")
 	c.hand.append(survivor)
 	c.energy = 3
@@ -233,6 +267,7 @@ func _test_picker_reopen(c: Combat) -> void:
 	picker._on_cancel()
 	await get_tree().process_frame
 
+	await _await_player_turn()
 	var acrobatics := Card.create("acrobatics")
 	c.hand.append(acrobatics)
 	c.energy = 3
