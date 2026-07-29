@@ -49,6 +49,8 @@ var _hovered_enemy: EnemyView = null
 var _enemy_timer: Timer = null
 var _busy: bool = false
 var _log_lines: Array = []
+## The player's own ATB gauge, built to sit under its health bar.
+var player_charge_bar: ProgressBar = null
 var _card_anim: CardAnim = null
 var _shake_origin: Vector2 = Vector2.ZERO
 
@@ -75,6 +77,11 @@ func _ready() -> void:
 	$EnergyOrb.add_theme_stylebox_override("panel", UiTheme.orb_style())
 	player_panel.add_theme_stylebox_override("panel", UiTheme.player_style())
 	UiTheme.style_hp_bar(player_hp_bar)
+	player_charge_bar = UiTheme.make_charge_bar()
+	player_charge_bar.position = Vector2(player_hp_bar.position.x,
+			player_hp_bar.position.y + player_hp_bar.size.y + 3)
+	player_charge_bar.size = Vector2(player_hp_bar.size.x, 6)
+	player_panel.add_child(player_charge_bar)
 
 
 # ════════════════════════════════ Combat lifecycle ═══════════════════════════
@@ -534,32 +541,39 @@ func _on_end_turn() -> void:
 	_enemy_timer.start(0.35)
 
 
+## Pumps the ATB clock until it is the player's turn again.
+##
+## Each call lets time run to the next actor that fills its gauge. If that is an
+## enemy it acts — animated first, then resolved — and the pump is scheduled
+## again. If it is the player, control comes back here and the hand unlocks.
 func _advance_enemy_phase() -> void:
 	if combat == null or combat.finished:
-		_busy = false
-		end_turn_button.disabled = false
+		_hand_control(true)
 		return
+
+	# combat.active is set by the engine when a gauge fills. Give an enemy its
+	# flourish before its effects land.
 	var actor: Actor = combat.peek_enemy() if CardAnim.enabled else null
 	if actor != null and not actor.intent.is_empty():
 		await _animate_enemy_move(actor)
 		if combat == null or combat.finished:
-			_busy = false
-			end_turn_button.disabled = false
+			_hand_control(true)
 			return
-	else:
-		combat.step_enemy()
+	var busy := combat.step_enemy()
 	_refresh_all()
-	if combat.peek_enemy() != null:
-		_enemy_timer.start(0.2)
-	elif not combat.finished and combat.phase == "enemy":
-		# Nothing left to act, but the phase still has to be closed out.
-		combat.step_enemy()
-		_refresh_all()
-		_busy = false
-		end_turn_button.disabled = combat.finished
-	else:
-		_busy = false
-		end_turn_button.disabled = combat.finished
+	if combat.finished:
+		_hand_control(true)
+		return
+	if busy or combat.phase != "player":
+		# Somebody else is still ahead of the player in the queue.
+		_enemy_timer.start(0.2 if busy else 0.05)
+		return
+	_hand_control(true)
+
+
+func _hand_control(to_player: bool) -> void:
+	_busy = not to_player
+	end_turn_button.disabled = not to_player or combat == null or combat.finished
 
 
 ## An enemy's move gets the same choreography as a card, with a stand-in token
@@ -632,6 +646,10 @@ func _refresh_all() -> void:
 	player_hp_label.text = "%d / %d" % [p.hp, p.max_hp]
 	player_block.visible = p.block > 0
 	player_block.text = "🛡 %d" % p.block
+	if player_charge_bar != null:
+		player_charge_bar.value = combat.charge_ratio(p) * 100.0
+		player_charge_bar.modulate = Color(1, 1, 1).lerp(
+				Color(1.0, 0.85, 0.45), combat.charge_ratio(p))
 	energy_label.text = "%d/%d" % [combat.energy, combat.energy_per_turn
 			+ combat.energy_bonus_relics()]
 	turn_label.text = "Turn %d" % combat.turn
@@ -729,6 +747,11 @@ func _sync_enemy_views() -> void:
 
 func _on_choice_requested(request: Dictionary) -> void:
 	choice_needed.emit(request)
+
+
+## Experience banked over the whole fight, for the reward screen.
+func xp_earned() -> int:
+	return combat.xp_pool if combat != null else 0
 
 
 func submit_choice(cards: Array) -> void:

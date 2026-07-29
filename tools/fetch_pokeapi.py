@@ -134,7 +134,23 @@ def main() -> int:
             move_names.add(entry["move"]["name"])
     fetch_many(cache, "move", sorted(move_names), args.workers)
 
-    # 5. Ailments and move-categories, so the effect mapper can enumerate them.
+    # 5. Evolution chains, for the levelling and evolution system. Several
+    #    species share one chain, so collect the distinct ids first.
+    chain_ids = set()
+    for dex in dex:
+        body = fetch(cache, "pokemon-species", dex)
+        if not body:
+            continue
+        url = (body.get("evolution_chain") or {}).get("url")
+        if url:
+            chain_ids.add(int(url.rstrip("/").rsplit("/", 1)[-1]))
+    fetch_many(cache, "evolution-chain", sorted(chain_ids), args.workers)
+
+    # 6. Growth rates give the XP curve for each level.
+    rates = fetch(cache, "", "growth-rate?limit=100")
+    fetch_many(cache, "growth-rate", [r["name"] for r in rates["results"]], args.workers)
+
+    # 7. Ailments and move-categories, so the effect mapper can enumerate them.
     fetch(cache, "", "move-ailment?limit=100")
     fetch(cache, "", "move-category?limit=100")
 

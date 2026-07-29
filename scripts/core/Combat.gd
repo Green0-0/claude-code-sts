@@ -46,14 +46,15 @@ var turn_attack_counter: int = 0       ## for Kunai / Shuriken / Ornamental Fan
 var lost_hp_this_combat: bool = false
 var preview_target_index: int = -1
 var potions_used: int = 0
+var xp_pool: int = 0                   ## experience banked from everything felled
 
 var pending_choice: Dictionary = {}
 var _queue: Array = []
 var _resolving: bool = false
-var _enemy_order: Array = []
-var _enemy_index: int = 0
 var _temp_thorns: int = 0
-var _preempting: bool = false      ## inside the faster side's opening attack
+## Cleared once the player has taken its first action. Until then it cannot be
+## killed — being outsped should cost you the opening, not the whole fight.
+var _player_has_acted: bool = false
 
 
 # ══════════════════════════════════ Setup ════════════════════════════════════
@@ -80,11 +81,15 @@ func setup(enemy_ids: Array, node_type: String, run_rng: RandomNumberGenerator) 
 	_apply_combat_start_relics()
 	for e in enemies:
 		_pick_intent(e)
-	phase = "player"
-	_preemptive_strike()
+	_seed_charges()
+	phase = "waiting"
+	# Nothing is "the player's turn" until a gauge fills. The UI pumps
+	# step_enemy() until somebody is ready, which may well be an enemy.
+	while step_enemy():
+		if finished:
+			return
 	if finished:
 		return
-	_start_player_turn()
 
 
 ## A player Pokemon fights with its own species' numbers: base stats and types
@@ -96,42 +101,25 @@ func _apply_poke_player_stats() -> void:
 	player.poke_name = String(mon["name"])
 	player.poke_stats = mon["stats"]
 	player.poke_types = mon["types"]
-	player.stat_scale = PokeBalance.trainer_scale(mon)
+	player.level = Run.player_level
 	energy_per_turn = PokeBalance.energy_for(mon)
 	base_draw = PokeBalance.draw_for(mon)
 
 
-## The fastest thing in the room gets the jump on you and attacks before your
-## first turn. This is what Speed buys an enemy.
-##
-## Only the single fastest one acts, and it cannot take you below 1 HP: a pack
-## of three quick Deerling would otherwise end the fight before you drew a hand,
-## which is not a fight. You always get your first turn.
-func _preemptive_strike() -> void:
-	if player == null or not player.is_pokemon():
-		return
-	var fastest: Actor = null
-	for e in living_enemies():
-		if not e.is_pokemon() or effective_speed(e) <= effective_speed(player):
-			continue
-		if fastest == null or effective_speed(e) > effective_speed(fastest):
-			fastest = e
-	if fastest == null:
-		return
-	_say("%s is faster — it strikes first!" % fastest.name)
-	_preempting = true
-	_take_enemy_turn(fastest)
-	_preempting = false
-	_check_deaths()
-	if _check_end():
-		return
-	_pick_intent(fastest)
+## Starting gauges. Everyone begins partly charged, spread by Speed, so the
+## opening of a fight is decided by how fast the combatants are rather than by
+## everyone starting from zero and the fastest always opening.
+func _seed_charges() -> void:
+	for a in _all_combatants():
+		var lead := clampf(float(effective_speed(a)) / 200.0, 0.0, 0.5)
+		a.charge = CHARGE_FULL * lead * rng.randf_range(0.6, 1.0)
 
 
-## The lowest HP a hit may leave this actor on. Only ever 1, and only for the
-## player during the pre-emptive strike.
+## The lowest HP a hit may leave this actor on. Only ever 1, and only for a
+## player who has not had a turn yet: however badly you are outsped, you always
+## get to act at least once.
 func _hp_floor(who: Actor) -> int:
-	return 1 if _preempting and who != null and who.is_player else 0
+	return 1 if not _player_has_acted and who != null and who.is_player else 0
 
 
 ## Whether anything in hand can put a dent in anything still standing. False
@@ -312,6 +300,7 @@ func _start_player_turn() -> void:
 	if player.has_status("mayhem"):
 		_play_top_of_draw(false)
 
+	_player_has_acted = true
 	_recompute_costs()
 	player_turn_started.emit()
 	changed.emit()
@@ -323,7 +312,7 @@ func end_turn() -> void:
 		return
 	if not pending_choice.is_empty():
 		return
-	phase = "enemy"
+	phase = "waiting"
 
 	# End-of-turn player effects
 	if Run.has_relic("orichalcum") and player.block == 0:
@@ -376,107 +365,206 @@ func end_turn() -> void:
 			c.free_this_turn = false
 
 	_decay_statuses(player)
+	_end_of_turn_for(player)
 	if _check_end():
 		return
-
-	# Enemy phase. Pokemon act in Speed order. The Spire's own cast has no Speed
-	# to sort by, and sort_custom is not stable, so leave their left-to-right
-	# order exactly as it was.
-	_enemy_order = living_enemies()
-	if Run.is_pokemon_run():
-		_enemy_order.sort_custom(func(a, b): return effective_speed(a) > effective_speed(b))
-	_enemy_index = 0
-	for e in _enemy_order:
-		_tick_poison(e)
-		_tick_poke_ailments(e)
-	_check_deaths()
+	# The player's gauge empties and time starts flowing again. Whoever fills
+	# next acts next — which may well be the player again, if it is fast enough.
+	_spend_charge(player)
 	changed.emit()
 	if _check_end():
 		return
 
 
-## Who acts next in the enemy phase, without advancing it. The UI needs this to
+# ══════════════════════════════ Active Time Battle ═══════════════════════════
+## Turn order is not an alternation any more: every combatant has a gauge that
+## fills at a rate set by its Speed, and whoever fills it first acts. A Jolteon
+## against a Slowpoke genuinely acts about three times for its two.
+##
+## The engine is still stepped by the UI rather than running on a real clock, so
+## a headless run and a played one resolve identically. advance_time() moves the
+## fiction forward to the next moment somebody is ready.
+
+## Gauge units. Arbitrary — only the ratio between it and Speed matters.
+const CHARGE_FULL := 1000.0
+
+## Floor on the rate a gauge fills at, so nothing with a truly awful Speed stalls
+## the clock forever. Deliberately small: at level 5 every Speed stat is in the
+## teens, and a floor anywhere near them would flatten the difference between a
+## Jolteon and a Slowpoke into nothing.
+const MIN_TICK_SPEED := 4.0
+
+
+## Advances time until somebody is ready to act, and makes them the active actor.
+## Returns the actor, or null if the fight is over.
+func _advance_time() -> Actor:
+	if finished:
+		return null
+	var live := _all_combatants()
+	if live.is_empty():
+		return null
+
+	# How long until the leader's gauge fills, in gauge units.
+	var soonest := INF
+	for a in live:
+		var rate := maxf(MIN_TICK_SPEED, float(effective_speed(a)))
+		var need: float = (CHARGE_FULL - a.charge) / rate
+		soonest = minf(soonest, need)
+	if soonest == INF:
+		return null
+	soonest = maxf(soonest, 0.0)
+
+	for a in live:
+		a.charge += maxf(MIN_TICK_SPEED, float(effective_speed(a))) * soonest
+
+	# Ties go to the faster actor, then to the player's side — being outsped
+	# should be the thing that costs you the opening, not a coin flip.
+	var ready: Array = []
+	for a in live:
+		if a.charge >= CHARGE_FULL - 0.001:
+			ready.append(a)
+	if ready.is_empty():
+		return null
+	ready.sort_custom(func(x, y):
+		var sx := effective_speed(x)
+		var sy := effective_speed(y)
+		if sx != sy:
+			return sx > sy
+		return x.is_player and not y.is_player)
+	return ready[0]
+
+
+## Everything still standing, player side included.
+func _all_combatants() -> Array:
+	var out: Array = []
+	if player != null and not player.is_dead():
+		out.append(player)
+	out.append_array(living_enemies())
+	return out
+
+
+## Empties an actor's gauge once it has acted. Overflow is kept, so a very fast
+## actor banks the excess rather than losing it.
+func _spend_charge(a: Actor) -> void:
+	if a == null:
+		return
+	a.charge = maxf(0.0, a.charge - CHARGE_FULL)
+	active = null
+	phase = "waiting"
+
+
+## How full a gauge is, 0-1. The UI draws this.
+func charge_ratio(a: Actor) -> float:
+	return clampf(a.charge / CHARGE_FULL, 0.0, 1.0) if a != null else 0.0
+
+
+## Who is acting right now, if anyone.
+var active: Actor = null
+
+
+## The next actor to act, without advancing anything. The UI needs this to
 ## animate a move before its effects resolve.
 func peek_enemy() -> Actor:
 	if finished or phase != "enemy":
 		return null
-	var i := _enemy_index
-	while i < _enemy_order.size():
-		var e: Actor = _enemy_order[i]
-		if e.alive and not e.is_dead():
-			return e
-		i += 1
-	return null
+	return active
 
 
-## Advance the enemy phase by one action. Returns true while work remains.
+## Steps the battle forward one action.
+##
+## Returns true when an enemy acted and there may be more to do, false when the
+## engine is now waiting on the player (or the fight has ended). The UI pumps
+## this on a timer, which is what paces the fight visually.
 func step_enemy() -> bool:
 	if finished:
 		return false
-	if phase != "enemy":
+	# Someone is already mid-turn.
+	if active != null and active.is_player:
 		return false
-	while _enemy_index < _enemy_order.size():
-		var e: Actor = _enemy_order[_enemy_index]
-		_enemy_index += 1
-		if not e.alive or e.is_dead():
-			continue
-		_take_enemy_turn(e)
+	if active != null:
+		_take_enemy_turn(active)
 		_check_deaths()
+		_spend_charge(active)
 		if _check_end():
 			return false
 		changed.emit()
 		return true
-	_finish_enemy_phase()
-	return false
+
+	var next := _advance_time()
+	if next == null:
+		return false
+	active = next
+	if next.is_player:
+		phase = "player"
+		_start_player_turn()
+		return false
+	phase = "enemy"
+	# Its intent was chosen when it last acted; refresh it in case the board
+	# changed while it was charging.
+	_pick_intent(next)
+	changed.emit()
+	return true
 
 
-func _finish_enemy_phase() -> void:
-	for e in living_enemies():
-		if e.has_status("ritual"):
-			e.add_signed_status("strength", e.get_status("ritual"))
-		if e.has_status("metallicize"):
-			_gain_block(e, e.get_status("metallicize"), true)
-		if e.has_status("plated_armor"):
-			_gain_block(e, e.get_status("plated_armor"), true)
-		if e.has_status("regen"):
-			var r: int = e.get_status("regen")
-			_heal(e, r)
-			e.set_status("regen", r - 1)
-		if e.has_status("strength_up_end"):
-			e.add_signed_status("strength", e.get_status("strength_up_end"))
-			e.set_status("strength_up_end", 0)
-		if e.has_status("fading"):
-			var f: int = e.get_status("fading") - 1
-			e.set_status("fading", f)
-			if f <= 0:
-				e.hp = 0
-		_decay_statuses(e)
-		e.turn_count += 1
-		_pick_intent(e)
-	_check_deaths()
-	if _check_end():
+## End-of-turn upkeep for whoever just acted. Under ATB this is per-actor rather
+## than a batch at the end of an enemy phase, so a fast enemy gets its Ritual
+## strength twice as often as a slow one — which is the point.
+func _end_of_turn_for(a: Actor) -> void:
+	if a == null or a.is_dead():
 		return
-	_start_player_turn()
+	if a.has_status("ritual"):
+		a.add_signed_status("strength", a.get_status("ritual"))
+	if a.has_status("metallicize"):
+		_gain_block(a, a.get_status("metallicize"), true)
+	if a.has_status("plated_armor"):
+		_gain_block(a, a.get_status("plated_armor"), true)
+	if a.has_status("regen"):
+		var r: int = a.get_status("regen")
+		_heal(a, r)
+		a.set_status("regen", r - 1)
+	if a.has_status("strength_up_end"):
+		a.add_signed_status("strength", a.get_status("strength_up_end"))
+		a.set_status("strength_up_end", 0)
+	if a.has_status("fading"):
+		var f: int = a.get_status("fading") - 1
+		a.set_status("fading", f)
+		if f <= 0:
+			a.hp = 0
 
 
+## One enemy's whole turn: upkeep, its action, then end-of-turn. Under ATB an
+## enemy's turn is self-contained — nothing else is happening around it.
 func _take_enemy_turn(e: Actor) -> void:
 	# An enemy's Block expires at the start of its own turn.
 	e.block = 0
+	_tick_poison(e)
+	_tick_poke_ailments(e)
+	_check_deaths()
+	if e.is_dead() or _check_end():
+		return
+
 	var stopped := incapacitated_reason(e)
 	if stopped != "":
 		_say(stopped)
-		return
-	var move_name: String = String(e.intent.get("name", ""))
-	if move_name == "":
+	else:
+		var move_name: String = String(e.intent.get("name", ""))
+		if move_name == "":
+			_pick_intent(e)
+			move_name = String(e.intent.get("name", ""))
+		var moves := EnemyLibrary.moves_of(e.enemy_id)
+		var move: Dictionary = moves.get(move_name, {"effects": []})
+		_say("%s uses %s." % [e.name, move_name])
+		e.move_history.append(move_name)
+		var ctx := {"owner": e, "target": player, "params": {}, "source_card": null}
+		_push_effects(move.get("effects", []), ctx)
+		_run_queue()
+
+	_end_of_turn_for(e)
+	_decay_statuses(e)
+	e.turn_count += 1
+	_check_deaths()
+	if not e.is_dead():
 		_pick_intent(e)
-		move_name = String(e.intent.get("name", ""))
-	var moves := EnemyLibrary.moves_of(e.enemy_id)
-	var move: Dictionary = moves.get(move_name, {"effects": []})
-	_say("%s uses %s." % [e.name, move_name])
-	e.move_history.append(move_name)
-	var ctx := {"owner": e, "target": player, "params": {}, "source_card": null}
-	_push_effects(move.get("effects", []), ctx)
-	_run_queue()
 
 
 func _pick_intent(e: Actor) -> void:
@@ -1091,10 +1179,12 @@ func calc_poke_damage(power: int, damage_class: String, move_type: String,
 	var atk_key := "spa" if damage_class == "special" else "atk"
 	var def_key := "spd" if damage_class == "special" else "df"
 
+	var level := PokeBalance.DEFAULT_LEVEL
 	var attack := float(PokeBalance.NEUTRAL_DEFENSE)
 	var user_types: Array = []
 	if source != null:
-		attack = float(source.base_stat(atk_key, 60)) * source.stat_scale
+		level = source.level
+		attack = float(source.stat(atk_key, 60))
 		attack *= PokeBalance.stage_multiplier(source.stage(atk_key))
 		user_types = source.poke_types
 		# A burned attacker hits half as hard with physical moves.
@@ -1104,7 +1194,7 @@ func calc_poke_damage(power: int, damage_class: String, move_type: String,
 	var defense := float(PokeBalance.NEUTRAL_DEFENSE)
 	var target_types: Array = []
 	if target != null:
-		defense = float(target.base_stat(def_key, 60)) * target.stat_scale
+		defense = float(target.stat(def_key, 60))
 		defense *= PokeBalance.stage_multiplier(target.stage(def_key))
 		target_types = target.poke_types
 
@@ -1117,7 +1207,7 @@ func calc_poke_damage(power: int, damage_class: String, move_type: String,
 	var stab := PokeData.stab_bonus(move_type, user_types)
 
 	var dmg := PokeBalance.move_damage(power, int(attack), int(defense),
-			type_mult, stab, extra)
+			type_mult, stab, extra, level)
 	if dmg <= 0:
 		return 0
 	# Hand off to the Spire layer for Strength, Weak, Vulnerable and Flight.
@@ -1195,9 +1285,10 @@ func _fixed_damage(kind: String, move_type: String, source: Actor, target: Actor
 		"flat_20":
 			return 20
 		"user_level":
-			return PokeBalance.LEVEL
+			return source.level if source != null else PokeBalance.DEFAULT_LEVEL
 		"psywave":
-			return max(1, int(round(PokeBalance.LEVEL * rng.randf_range(0.5, 1.5))))
+			var lvl := source.level if source != null else PokeBalance.DEFAULT_LEVEL
+			return max(1, int(round(lvl * rng.randf_range(0.5, 1.5))))
 		"half_target_hp":
 			return max(1, int(floor(target.hp / 2.0)))
 		"match_user_hp":
@@ -1354,7 +1445,7 @@ func _apply_stage(target: Actor, stat: String, change: int, source: Actor) -> vo
 func effective_speed(who: Actor) -> int:
 	if who == null:
 		return 0
-	var spe := float(who.base_stat("spe", 60))
+	var spe := float(who.stat("spe", 60))
 	spe *= PokeBalance.stage_multiplier(who.stage("spe"))
 	if who.has_status("paralysis"):
 		spe *= 0.25
@@ -1382,8 +1473,8 @@ func incapacitated_reason(who: Actor) -> String:
 	if who.has_status("infatuation") and rng.randf() < 0.5:
 		return "%s is immobilised by love." % who.name
 	if who.has_status("confusion") and rng.randf() < 0.33:
-		var self_hit := PokeBalance.base_damage(40, who.base_stat("atk", 60),
-				who.base_stat("df", 60))
+		var self_hit := PokeBalance.base_damage(40, who.stat("atk", 60),
+				who.stat("df", 60), who.level)
 		_damage(who, self_hit, who, "hp_loss", null)
 		return "%s hurt itself in its confusion." % who.name
 	return ""
@@ -2031,6 +2122,13 @@ func _check_deaths() -> void:
 
 func _on_enemy_death(e: Actor) -> void:
 	_say("%s is defeated." % e.name)
+	# Experience is banked as things fall, not counted at the end, so anything
+	# that revives (an Awakened One, a split Slime) cannot be farmed twice.
+	if e.is_pokemon() and not e.is_minion:
+		var mon := PokeData.mon(e.poke_name)
+		if not mon.is_empty():
+			var role := String(PokeMobs.split_id(e.enemy_id).get("role", "normal"))
+			xp_pool += PokeLevels.xp_reward(mon, e.level, role)
 	enemy_died.emit(e)
 	if e.has_status("spore_cloud"):
 		_apply_status(player, "vulnerable", e.get_status("spore_cloud"), e)

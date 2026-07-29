@@ -177,8 +177,93 @@ def build_pokemon(cache: str, limit: int, move_index: dict) -> list:
             "capture_rate": species.get("capture_rate") or 0,
             "color": (species.get("color") or {}).get("name", "gray"),
             "genus": english(species.get("genera", []), "genus"),
+            # Levelling needs the XP curve and what this species is worth.
+            "growth": (species.get("growth_rate") or {}).get("name", "medium"),
+            "base_xp": body.get("base_experience") or 60,
             "learnset": learnset_for(body, move_index),
         })
+    return out
+
+
+## Evolution triggers we can express in a dungeon. Anything else (trade,
+## location, time of day, a held item) is folded onto a level threshold by
+## build_evolutions, since none of those exist in a Spire run.
+LEVEL_TRIGGER = "level-up"
+ITEM_TRIGGER = "use-item"
+
+## Level at which a trigger we cannot reproduce is treated as firing. Stone
+## evolutions in the games happen whenever you find the stone, which in dungeon
+## terms is "somewhere in the middle".
+FALLBACK_EVO_LEVEL = 30
+TRADE_EVO_LEVEL = 37
+
+
+def evo_level(detail: dict) -> int:
+    """The level this evolution should happen at, in dungeon terms."""
+    if detail.get("min_level"):
+        return int(detail["min_level"])
+    trigger = (detail.get("trigger") or {}).get("name", "")
+    if trigger == "trade":
+        return TRADE_EVO_LEVEL
+    if detail.get("min_happiness") or detail.get("min_affection"):
+        # Friendship evolutions come early in practice.
+        return 22
+    return FALLBACK_EVO_LEVEL
+
+
+def walk_chain(node: dict, out: dict) -> None:
+    """Flattens a chain into {species: [{to, level, trigger}, ...]}."""
+    name = node["species"]["name"]
+    branches = []
+    for child in node.get("evolves_to", []):
+        details = child.get("evolution_details") or [{}]
+        # A branch can list several ways to evolve; take the earliest.
+        best = min(details, key=evo_level)
+        branches.append({
+            "to": child["species"]["name"],
+            "level": evo_level(best),
+            "trigger": (best.get("trigger") or {}).get("name", LEVEL_TRIGGER),
+        })
+        walk_chain(child, out)
+    if branches:
+        branches.sort(key=lambda b: b["level"])
+        out[name] = branches
+
+
+def build_evolutions(cache: str, limit: int) -> dict:
+    """species name -> list of branches it can evolve into."""
+    chains = set()
+    for dex in range(1, limit + 1):
+        species = load(cache, "pokemon-species", dex)
+        if not species:
+            continue
+        url = (species.get("evolution_chain") or {}).get("url")
+        if url:
+            chains.add(int(url.rstrip("/").rsplit("/", 1)[-1]))
+    out = {}
+    for chain_id in sorted(chains):
+        body = load(cache, "evolution-chain", chain_id)
+        if body and body.get("chain"):
+            walk_chain(body["chain"], out)
+    return out
+
+
+def build_growth(cache: str) -> dict:
+    """growth rate name -> total XP required at each level, index 0 = level 1."""
+    index = load(cache, "", "growth-rate?limit=100")
+    if not index:
+        return {}
+    out = {}
+    for entry in index["results"]:
+        body = load(cache, "growth-rate", entry["name"])
+        if not body:
+            continue
+        table = [0] * 101
+        for lvl in body.get("levels", []):
+            n = int(lvl["level"])
+            if 1 <= n <= 100:
+                table[n] = int(lvl["experience"])
+        out[entry["name"]] = table[1:]
     return out
 
 
@@ -222,12 +307,20 @@ def main() -> int:
         print("cache is incomplete — nothing written", file=sys.stderr)
         return 1
 
+    evolutions = build_evolutions(cache, args.limit)
+    growth = build_growth(cache)
+
     write_json(os.path.join(args.out, "types.json"), types)
     write_json(os.path.join(args.out, "moves.json"), moves)
     write_json(os.path.join(args.out, "pokemon.json"), mons)
+    write_json(os.path.join(args.out, "evolution.json"),
+               {"chains": evolutions, "growth": growth})
 
     learn_rows = sum(len(m["learnset"]) for m in mons)
+    branches = sum(len(v) for v in evolutions.values())
     print(f"  {len(mons)} pokemon, {len(moves)} moves, {learn_rows} learnset rows")
+    print(f"  {len(evolutions)} evolving species, {branches} branches, "
+          f"{len(growth)} growth curves")
     return 0
 
 

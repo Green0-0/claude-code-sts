@@ -50,9 +50,202 @@ func _run() -> void:
 	_test_learnset_decks()
 	_test_mobs()
 	_test_encounters()
+	_test_levels()
+	_test_evolution()
+	_test_progression()
+	_test_gated_rewards()
 	_test_combat()
 	_test_ailments()
 	_test_speed()
+
+
+# ═════════════════════════════════ Levelling ═════════════════════════════════
+func _test_levels() -> void:
+	print("[poke] --- levels and experience")
+	# The main-series stat formula, hand-checked. Mewtwo has base 106 HP and 154
+	# Sp. Atk, so at level 100 with the average IV and no EVs:
+	#   HP  = floor((2*106 + 15) * 100/100) + 100 + 10 = 337
+	#   SpA = floor((2*154 + 15) * 100/100) + 5        = 328
+	# (Published level-100 figures are higher because they assume 31 IVs and a
+	# full EV spread, neither of which exists here.)
+	var mewtwo := PokeData.mon("mewtwo")
+	_check("level 100 Mewtwo HP",
+			PokeLevels.stat_at(int(mewtwo["stats"]["hp"]), 100, true), 337)
+	_check("level 100 Mewtwo Sp. Atk",
+			PokeLevels.stat_at(int(mewtwo["stats"]["spa"]), 100), 328)
+	_check("Shedinja is always on 1 HP",
+			PokeLevels.stat_at(1, 100, true), 1)
+	_check_true("stats climb with level",
+			PokeLevels.stat_at(80, 50) > PokeLevels.stat_at(80, 10))
+
+	# XP curves came across intact.
+	_check("medium curve, level 20", PokeLevels.xp_for_level("medium", 20), 8000)
+	_check("medium curve, level 50", PokeLevels.xp_for_level("medium", 50), 125000)
+	_check("XP maps back to a level", PokeLevels.level_for_xp("medium", 8000), 20)
+	_check("and rounds down between levels",
+			PokeLevels.level_for_xp("medium", 8999), 20)
+	_check_true("curves differ",
+			PokeLevels.xp_for_level("slow", 50) > PokeLevels.xp_for_level("fast", 50))
+	var half := PokeLevels.level_progress("medium",
+			(PokeLevels.xp_for_level("medium", 20) + PokeLevels.xp_for_level("medium", 21)) / 2)
+	_near("progress reads mid-level", half, 0.5, 0.1)
+
+	# Defeating something is worth more the higher level it was.
+	var rattata := PokeData.mon("rattata")
+	_check_true("XP scales with the level felled",
+			PokeLevels.xp_reward(rattata, 40) > PokeLevels.xp_reward(rattata, 10) * 3)
+	_check_true("bosses are worth more",
+			PokeLevels.xp_reward(rattata, 20, "boss")
+					> PokeLevels.xp_reward(rattata, 20, "normal"))
+
+	# A run levels up as it earns.
+	Run.start_run(PokeCharacters.character_id("bulbasaur"), 99)
+	_check("runs start at the starting level", Run.player_level, PokeLevels.START_LEVEL)
+	var hp_before := Run.max_hp
+	var gained := Run.award_xp(PokeLevels.xp_for_level("medium-slow", 12))
+	_check_true("experience levels the party up", gained > 0)
+	_check_true("levelling raised Max HP", Run.max_hp > hp_before)
+	_check_true("and healed by the difference", Run.hp > 0)
+	_check("the level matches the XP",
+			Run.player_level, PokeLevels.level_for_xp("medium-slow", Run.player_xp))
+
+
+func _test_evolution() -> void:
+	print("[poke] --- evolution")
+	_check("bulbasaur evolves at 16",
+			int((PokeData.evolutions_of("bulbasaur")[0] as Dictionary)["level"]), 16)
+	_check("magikarp becomes gyarados",
+			String((PokeData.evolutions_of("magikarp")[0] as Dictionary)["to"]), "gyarados")
+	_check("blissey is the end of its line", PokeData.evolutions_of("blissey"), [])
+	_check_true("eevee branches", PokeData.evolutions_of("eevee").size() >= 5)
+
+	_check_true("not available before the level",
+			PokeEvolution.available("bulbasaur", 15).is_empty())
+	_check_true("available at it",
+			not PokeEvolution.available("bulbasaur", 16).is_empty())
+	_check("and it says when", PokeEvolution.next_level("bulbasaur", 5), 16)
+	# Stone and trade evolutions have no dungeon equivalent, so the importer
+	# folds them onto a level. They must still be reachable.
+	_check_true("stone evolutions still happen",
+			PokeEvolution.next_level("eevee", 5) > 0)
+	_check_true("the whole line is known",
+			PokeEvolution.line_from("charmander").has("charizard"))
+
+	# Evolving mid-run carries the deck and swaps the stat line.
+	Run.start_run(PokeCharacters.character_id("magikarp"), 7)
+	var deck_before := Run.deck.size()
+	var hp_before := Run.max_hp
+	Run.player_level = 20
+	_check_true("magikarp can evolve at 20",
+			PokeEvolution.can_evolve("magikarp", Run.player_level))
+	_check_true("it evolved", Run.evolve_into("gyarados"))
+	_check("the run is now a gyarados", String(Run.player_mon()["name"]), "gyarados")
+	_check("the deck came with it", Run.deck.size(), deck_before)
+	_check_true("and it got much tougher", Run.max_hp > hp_before * 2)
+	_check_true("its typing changed", Run.player_mon()["types"] == ["water", "flying"])
+	# The card pool is the evolved species' now.
+	var pool := PokeCharacters.reward_pool(Run.character, "", 0)
+	_check_true("the pool is gyarados's",
+			pool.has(PokeMoves.card_id("hydro-pump")))
+
+
+func _test_progression() -> void:
+	print("[poke] --- progression and the BST slope")
+	# The headline: the dungeon starts small and grows.
+	var early := PokeBalance.bst_target(0.0, "weak")
+	var late := PokeBalance.bst_target(1.0, "weak")
+	_check_true("the cap starts low", early < 260.0)
+	_check_true("and climbs a long way", late > early * 2.2)
+	print("[poke]      weak-slot BST target: %.0f early -> %.0f late" % [early, late])
+
+	# A Caterpie-tier species is what you meet first, and a legendary is not.
+	_check_true("caterpie is common at the start",
+			PokeEncounters.probability("caterpie", 0.0, "weak") > 0.5)
+	_check("dragonite cannot appear at the start",
+			PokeEncounters.probability("dragonite", 0.0, "weak"), 0.0)
+	_check("nor can a legendary",
+			PokeEncounters.probability("mewtwo", 0.0, "strong"), 0.0)
+	# But wild legendaries do turn up at the end.
+	_check_true("wild legendaries appear late",
+			PokeEncounters.probability("zapdos", 1.0, "strong") > 0.0)
+	print("[poke]      late wild zapdos: %.3f%%"
+			% PokeEncounters.probability("zapdos", 1.0, "strong"))
+
+	# The dungeon's level climbs with the same progress.
+	Run.start_run(PokeCharacters.character_id("bulbasaur"), 5)
+	Run.floor_num = 0
+	_check("the dungeon starts at the starting level",
+			Run.dungeon_level(), PokeLevels.START_LEVEL)
+	# It tracks the party rather than the floor count, so that a run which earns
+	# slowly is not left behind by its own dungeon.
+	Run.player_level = 30
+	_check("the dungeon matches the party", Run.dungeon_level(), 30)
+	# But it still climbs on its own if the party somehow does not.
+	Run.player_level = PokeLevels.START_LEVEL
+	Run.floor_num = Run.total_floors()
+	_check_true("and climbs regardless", Run.dungeon_level() > PokeLevels.START_LEVEL)
+	Run.player_level = 40
+	_check_true("never far behind the party", Run.dungeon_level() >= 40)
+	_check_true("elites are ahead of the curve",
+			Run.level_for_role("elite") > Run.level_for_role("monster"))
+	_check_true("bosses more so",
+			Run.level_for_role("boss") > Run.level_for_role("elite"))
+	# A longer run than the Spire's three acts.
+	_check("four acts", Run.ACTS, 4)
+	Run.floor_num = 0
+
+	# Save and continue have to carry the level, or a restored run keeps its
+	# evolved species but reverts to the starting stat line.
+	Run.start_run(PokeCharacters.character_id("charmander"), 31)
+	Run.award_xp(PokeLevels.xp_for_level(Run.growth_rate(), 18))
+	Run.evolve_into("charmeleon")
+	var level_before := Run.player_level
+	var xp_before := Run.player_xp
+	var species_before := String(Run.player_mon()["name"])
+	var hp_before := Run.max_hp
+	Run.save_run()
+	Run.start_run(PokeCharacters.character_id("pikachu"), 1)   # clobber it
+	_check_true("the save loaded", Run.load_run())
+	_check("the level survived the save", Run.player_level, level_before)
+	_check("so did the experience", Run.player_xp, xp_before)
+	_check("and the evolved species", String(Run.player_mon()["name"]), species_before)
+	_check("so the stat line is unchanged too", Run.max_hp, hp_before)
+	Run.clear_save()
+
+
+func _test_gated_rewards() -> void:
+	print("[poke] --- level-gated card rewards")
+	Run.start_run(PokeCharacters.character_id("charmander"), 11)
+	var id := Run.character
+	var low := PokeCharacters.reward_pool(id, "", 5)
+	var high := PokeCharacters.reward_pool(id, "", 60)
+	_check_true("the pool is gated by level", low.size() < high.size())
+	_check_true("and widens as you level", high.size() > low.size() + 5)
+	print("[poke]      charmander pool: %d moves at Lv5, %d at Lv60"
+			% [low.size(), high.size()])
+
+	# Fire Blast is a level 46 move: out of reach early, in the pool later.
+	var fire_blast := PokeMoves.card_id("fire-blast")
+	_check_true("a high-level move is out of reach at first", not low.has(fire_blast))
+	_check_true("but reachable once levelled", high.has(fire_blast))
+	# The ungated pool is the whole learnset, for the lucky off-gate roll.
+	_check_true("the off-gate pool ignores the gate",
+			PokeCharacters.reward_pool(id, "", 0).has(fire_blast))
+
+	# Elites are far more likely to hand out something off-gate.
+	var rng := RandomNumberGenerator.new()
+	rng.seed = 3
+	var normal_hits := 0
+	var elite_hits := 0
+	for i in range(2000):
+		if PokeCharacters.rolls_off_gate("monster", rng):
+			normal_hits += 1
+		if PokeCharacters.rolls_off_gate("elite", rng):
+			elite_hits += 1
+	_check_true("off-gate rewards are rare normally", normal_hits < 250)
+	_check_true("and common from elites", elite_hits > normal_hits * 3)
+	print("[poke]      off-gate rate: %.1f%% normal, %.1f%% elite"
+			% [normal_hits / 20.0, elite_hits / 20.0])
 
 
 # ═══════════════════════════════════ Data ════════════════════════════════════
@@ -106,10 +299,18 @@ func _test_stats() -> void:
 
 	# HP follows base HP, so the wall is a wall and the glass cannon is not.
 	_check_true("blissey out-HPs pikachu",
-			PokeBalance.mob_hp(blissey) > PokeBalance.mob_hp(pikachu) * 3)
-	_check_true("shedinja is fragile", PokeBalance.mob_hp(shedinja) < 20)
+			PokeBalance.mob_hp(blissey, 20) > PokeBalance.mob_hp(pikachu, 20) * 2)
+	# The same species is a different animal at a different level.
+	_check_true("levels raise HP",
+			PokeBalance.mob_hp(pikachu, 40) > PokeBalance.mob_hp(pikachu, 10) * 2)
+	_check_true("levels raise damage",
+			PokeBalance.base_damage(80, 60, 60, 40) > PokeBalance.base_damage(80, 60, 60, 10))
+	_check_true("shedinja is fragile", PokeBalance.mob_hp(shedinja, 20) < 20)
+	# Wide bounds on purpose: PACK_SCALE is an interim value while the party is
+	# a party of one. The invariant that matters is that a party member is
+	# tougher than the same species met in the wild.
 	_check_true("player HP is playable",
-			PokeBalance.player_hp(pikachu) >= 50 and PokeBalance.player_hp(pikachu) <= 90)
+			PokeBalance.player_hp(pikachu, 20) > PokeBalance.mob_hp(pikachu, 20))
 	_check_true("elites are tougher", PokeBalance.role_hp_multiplier("elite") > 1.0)
 
 	# Speed buys tempo.
@@ -125,11 +326,11 @@ func _test_stats() -> void:
 			PokeBalance.stage_multiplier(6), 0.001)
 
 	# The damage formula responds to both sides' stats.
-	var strong := PokeBalance.base_damage(90, 130, 80)
-	var weak := PokeBalance.base_damage(90, 50, 80)
+	var strong := PokeBalance.base_damage(90, 130, 80, 20)
+	var weak := PokeBalance.base_damage(90, 50, 80, 20)
 	_check_true("higher Attack hits harder", strong > weak)
-	var vs_wall := PokeBalance.base_damage(90, 90, 160)
-	var vs_paper := PokeBalance.base_damage(90, 90, 40)
+	var vs_wall := PokeBalance.base_damage(90, 90, 160, 20)
+	var vs_paper := PokeBalance.base_damage(90, 90, 40, 20)
 	_check_true("higher Defense soaks more", vs_paper > vs_wall * 2)
 	_check("immunity zeroes damage",
 			PokeBalance.move_damage(90, 100, 80, 0.0, 1.0), 0)
@@ -240,7 +441,9 @@ func _test_learnset_decks() -> void:
 	var d := PokeCharacters.get_def(pika)
 	_check("pikachu is playable", String(d["name"]), "Pikachu")
 	_check("uses the pokemon colour", String(d["color"]), "pokemon")
-	_check_true("HP came from base stats", int(d["max_hp"]) > 40)
+	_check_true("HP came from base stats and level", int(d["max_hp"]) > 20)
+	_check("the picker reports the starting level",
+			int(d["level"]), PokeLevels.START_LEVEL)
 
 	var deck := PokeCharacters.starter_deck(pika)
 	_check("starter deck is full", deck.size(), PokeCharacters.DECK_SIZE)
@@ -258,13 +461,22 @@ func _test_learnset_decks() -> void:
 			legal = false
 	_check_true("deck is drawn from the learnset", legal)
 
-	var pool := PokeCharacters.reward_pool(pika)
+	# Ungated, so this is everything the line can ever learn.
+	var pool := PokeCharacters.reward_pool(pika, "", 0)
 	_check_true("reward pool is big", pool.size() > 40)
+	# Gated to a fresh run, it is a fraction of that.
+	var starting_pool := PokeCharacters.reward_pool(pika, "", PokeLevels.START_LEVEL)
+	_check_true("and much smaller at level 5", starting_pool.size() < pool.size() / 2)
+	# The pool reaches down the evolution line too, so a Pikachu can be offered
+	# a move it will only learn as a Raichu.
+	for later in PokeEvolution.line_from("pikachu"):
+		for row in PokeData.mon(later)["learnset"]:
+			learnable.append(PokeMoves.card_id(String(PokeData.move_at(int(row[0]))["name"])))
 	var pool_legal := true
 	for id in pool:
 		if not learnable.has(id):
 			pool_legal = false
-	_check_true("reward pool is drawn from the learnset", pool_legal)
+	_check_true("reward pool is drawn from the line's learnsets", pool_legal)
 
 	# A different species gets a different deck and pool.
 	var char_bulba := PokeCharacters.character_id("bulbasaur")
@@ -272,8 +484,10 @@ func _test_learnset_decks() -> void:
 			PokeCharacters.starter_deck(char_bulba) != deck)
 	_check_true("bulbasaur cannot learn Thunderbolt",
 			not PokeCharacters.reward_pool(char_bulba).has(PokeMoves.card_id("thunderbolt")))
-	_check_true("pikachu can learn Thunderbolt",
+	_check_true("pikachu can learn Thunderbolt eventually",
 			pool.has(PokeMoves.card_id("thunderbolt")))
+	_check_true("but not at level 5",
+			not starting_pool.has(PokeMoves.card_id("thunderbolt")))
 
 	# Every species has to produce a usable run: a full deck, and something in it
 	# that can actually deal damage.
@@ -333,14 +547,21 @@ func _test_mobs() -> void:
 	var deerling := EnemyLibrary.get_def(PokeMobs.enemy_id("deerling"))
 	_check_true("a wild Deerling has not learnt Double-Edge yet",
 			not (deerling["moves"] as Dictionary).has("Double Edge"))
+	# A boss is further up the same species' level curve, so it knows moves the
+	# wild form has not reached.
 	var deerling_boss := EnemyLibrary.get_def(PokeMobs.enemy_id("deerling", "boss"))
-	_check_true("as a boss it has",
-			(deerling_boss["moves"] as Dictionary).has("Double Edge"))
+	_check_true("a boss is higher level",
+			int(deerling_boss["level"]) > int(deerling["level"]))
+	var extra := 0
+	for move_name in (deerling_boss["moves"] as Dictionary):
+		if not (deerling["moves"] as Dictionary).has(move_name):
+			extra += 1
+	_check_true("and knows moves the wild form does not", extra > 0)
 
 	# Nothing may know a move above its role's level cap — unless it has no way
 	# to attack at all below it, in which case reaching higher beats a fight
 	# that cannot be won. Delibird learns its first attack at 25.
-	var cap: int = PokeMobs.MOVE_LEVEL_CAP["normal"]
+	var cap: int = Run.level_for_role("normal")
 	var over_cap := 0
 	for mon in PokeData.mons():
 		var levels := {}
@@ -398,46 +619,46 @@ func _test_mobs() -> void:
 func _test_encounters() -> void:
 	print("[poke] --- BST-weighted encounters")
 	# The headline rule: what you meet depends on BST, and it shifts by act.
-	var rattata := PokeEncounters.probability("rattata", 1, "weak")
-	var dragonite := PokeEncounters.probability("dragonite", 1, "weak")
-	_check_true("weak act 1 favours low BST", rattata > dragonite * 100.0)
-	print("[poke]      act1 weak: rattata %.3f%%, dragonite %.4f%%" % [rattata, dragonite])
+	var rattata := PokeEncounters.probability("rattata", 0.0, "weak")
+	var dragonite := PokeEncounters.probability("dragonite", 0.0, "weak")
+	_check_true("early weak slots favour low BST", rattata > dragonite * 100.0)
+	print("[poke]      early weak: rattata %.3f%%, dragonite %.4f%%" % [rattata, dragonite])
 
-	var drag3 := PokeEncounters.probability("dragonite", 3, "boss")
-	var ratt3 := PokeEncounters.probability("rattata", 3, "boss")
-	_check_true("act 3 bosses favour high BST", drag3 > ratt3 * 100.0)
-	print("[poke]      act3 boss: dragonite %.3f%%, rattata %.4f%%" % [drag3, ratt3])
+	var drag3 := PokeEncounters.probability("dragonite", 1.0, "boss")
+	var ratt3 := PokeEncounters.probability("rattata", 1.0, "boss")
+	_check_true("late bosses favour high BST", drag3 > ratt3 * 100.0)
+	print("[poke]      late boss: dragonite %.3f%%, rattata %.4f%%" % [drag3, ratt3])
 
 	# Legendaries are boss material only.
-	_check("mewtwo is not a weak encounter",
-			PokeEncounters.probability("mewtwo", 1, "weak"), 0.0)
+	_check("mewtwo is not an early encounter",
+			PokeEncounters.probability("mewtwo", 0.0, "weak"), 0.0)
 	_check_true("mewtwo can be a boss",
-			PokeEncounters.probability("mewtwo", 3, "boss") > 0.0)
+			PokeEncounters.probability("mewtwo", 1.0, "boss") > 0.0)
 
 	# The same species gets rarer as the band moves away from its BST.
-	var caterpie1 := PokeEncounters.probability("caterpie", 1, "weak")
-	var caterpie3 := PokeEncounters.probability("caterpie", 3, "weak")
-	_check_true("caterpie fades by act 3", caterpie1 > caterpie3 * 10.0)
+	var caterpie1 := PokeEncounters.probability("caterpie", 0.0, "weak")
+	var caterpie3 := PokeEncounters.probability("caterpie", 1.0, "weak")
+	_check_true("caterpie fades by the end", caterpie1 > caterpie3 * 10.0)
 
 	# Tables must be non-empty and sum to 100%.
-	for act in [1, 2, 3]:
+	for step in [0.0, 0.5, 1.0]:
 		for kind in ["weak", "strong", "elite", "boss"]:
-			var rows := PokeEncounters.table(act, kind)
+			var rows := PokeEncounters.table(step, kind)
 			if rows.is_empty():
-				_check("act %d %s table is populated" % [act, kind], 0, 1)
+				_check("progress %.1f %s table is populated" % [step, kind], 0, 1)
 				continue
 			var total := 0.0
 			for row in rows:
 				total += PokeEncounters.probability(
-						String(PokeData.mon_at(int(row["index"]))["name"]), act, kind)
-			_near("act %d %s sums to 100%%" % [act, kind], total, 100.0, 0.5)
+						String(PokeData.mon_at(int(row["index"]))["name"]), step, kind)
+			_near("progress %.1f %s sums to 100%%" % [step, kind], total, 100.0, 0.5)
 
 	# Picking yields spawnable ids, and weak groups come in packs.
 	var rng := RandomNumberGenerator.new()
 	rng.seed = 7
 	var pack_sizes: Array = []
 	for i in range(40):
-		var group := PokeEncounters.pick(1, "weak", rng, [])
+		var group := PokeEncounters.pick(0.0, "weak", rng, [])
 		_check_true("picked group is not empty", group.size() > 0) if i == 0 else null
 		pack_sizes.append(group.size())
 		for eid in group:
@@ -448,12 +669,12 @@ func _test_encounters() -> void:
 		biggest = maxi(biggest, int(n))
 	_check_true("weak encounters can be packs", biggest >= 2)
 
-	var boss_group := PokeEncounters.boss_for(3, rng)
+	var boss_group := PokeEncounters.boss_for(1.0, rng)
 	_check("bosses come alone", boss_group.size(), 1)
 	_check_true("boss id is a boss", String(boss_group[0]).ends_with("_boss"))
 
-	print("[poke]      act1 weak top: %s" % str(PokeEncounters.top_candidates(1, "weak", 5)))
-	print("[poke]      act3 boss top: %s" % str(PokeEncounters.top_candidates(3, "boss", 5)))
+	print("[poke]      early weak top: %s" % str(PokeEncounters.top_candidates(0.0, "weak", 5)))
+	print("[poke]      late boss top: %s" % str(PokeEncounters.top_candidates(1.0, "boss", 5)))
 
 
 # ═════════════════════════════════ Combat ════════════════════════════════════
@@ -640,30 +861,58 @@ func _test_speed() -> void:
 			slow.player.hp < slow.player.max_hp or slow.player.block > 0
 					or slow.enemies[0].block > 0 or slow.turn >= 1)
 
-	# But it cannot deny the player their first turn. A pack of fast attackers
-	# used to be able to end the fight before a card was drawn.
+	# However badly outsped, the player always gets to act at least once.
 	for i in range(25):
 		var ambush := _begin(PokeCharacters.character_id("shuckle"),
 				[PokeMobs.enemy_id("electrode"), PokeMobs.enemy_id("jolteon"),
 				PokeMobs.enemy_id("crobat")])
-		if ambush.player.hp < 1 or ambush.finished:
+		if ambush.player.hp < 1 or (ambush.finished and not ambush.victory):
 			_check("an ambush left the player alive (seed %d)" % i, ambush.player.hp, 1)
 			break
 		if i == 24:
 			_check_true("25 ambushes, still standing every time", true)
-	# Only one of them gets the jump, however many are faster.
-	var pack := _begin(PokeCharacters.character_id("shuckle"),
-			[PokeMobs.enemy_id("electrode"), PokeMobs.enemy_id("jolteon")])
-	_check_true("the ambush is one attacker, not the whole pack",
-			pack.player.max_hp - pack.player.hp < pack.player.max_hp * 0.5)
 
-	# Enemies act fastest-first within the enemy phase.
-	var many := _begin(PokeCharacters.character_id("snorlax"),
+	# ── The ATB gauge itself ────────────────────────────────────────────────
+	print("[poke] --- ATB charge gauges")
+	var atb := _begin(PokeCharacters.character_id("snorlax"),
 			[PokeMobs.enemy_id("slowpoke"), PokeMobs.enemy_id("jolteon")])
-	many.end_turn()
-	var order: Array = many._enemy_order
-	if order.size() >= 2:
-		_check_true("enemy phase runs in Speed order",
-				many.effective_speed(order[0]) >= many.effective_speed(order[1]))
-	else:
-		_check("enemy order was built", order.size(), 2)
+	var slowpoke: Actor = atb.enemies[0]
+	var jolteon: Actor = atb.enemies[1]
+	_check_true("jolteon is much faster than slowpoke",
+			atb.effective_speed(jolteon) > atb.effective_speed(slowpoke) * 2)
+
+	# Let a long stretch of time run and count who actually acted. Turn order is
+	# emergent: the fast one should act far more often than the slow one.
+	for step in range(400):
+		if atb.finished:
+			break
+		if atb.phase == "player":
+			atb.end_turn()
+		else:
+			atb.step_enemy()
+	var jolt_turns := jolteon.turn_count
+	var slow_turns := slowpoke.turn_count
+	print("[poke]      over one fight: jolteon acted %d times, slowpoke %d"
+			% [jolt_turns, slow_turns])
+	_check_true("the faster enemy acted more often", jolt_turns > slow_turns)
+	_check_true("and roughly in proportion to Speed",
+			float(jolt_turns) > float(slow_turns) * 1.5)
+
+	# A gauge reads 0-1 for the UI, and empties when its owner acts.
+	var gauge := _begin(PokeCharacters.character_id("pikachu"),
+			[PokeMobs.enemy_id("rattata")])
+	_check_true("a gauge reads as a fraction",
+			gauge.charge_ratio(gauge.player) >= 0.0
+					and gauge.charge_ratio(gauge.player) <= 1.0)
+	if gauge.phase == "player":
+		var before_charge := gauge.player.charge
+		gauge.end_turn()
+		_check_true("acting spends the gauge", gauge.player.charge < before_charge)
+
+	# Paralysis quarters Speed, so it should cost real turns, not just a number.
+	var para := _begin(PokeCharacters.character_id("jolteon"),
+			[PokeMobs.enemy_id("rattata")])
+	var free_speed := para.effective_speed(para.player)
+	para.player.add_status("paralysis", 99)
+	_check_true("paralysis costs three quarters of your Speed",
+			para.effective_speed(para.player) < free_speed * 0.3)

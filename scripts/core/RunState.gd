@@ -42,6 +42,20 @@ var pending_boss_relic: bool = false
 var run_active: bool = false
 var run_score: int = 0
 
+## ── Levelling ──────────────────────────────────────────────────────────────
+## A longer, more enriching run: four acts rather than three, so there is room
+## for a party to level through two or three evolutions before it ends.
+const ACTS := 4
+
+## The level the dungeon fields on the final floor. The party is expected to
+## arrive somewhere near it, having evolved once or twice on the way.
+const DUNGEON_END_LEVEL := 55
+
+var player_level: int = PokeLevels.START_LEVEL
+var player_xp: int = 0
+var pending_evolution: Dictionary = {}   ## branch offered but not yet answered
+var last_encounter_role: String = "monster"
+
 
 func _ready() -> void:
 	randomize()
@@ -54,6 +68,12 @@ func start_run(char_id: String, run_seed: int = 0, asc: int = 0) -> void:
 	rng = RandomNumberGenerator.new()
 	rng.seed = seed_value
 	ascension = asc
+
+	player_level = PokeLevels.START_LEVEL
+	player_xp = PokeLevels.xp_for_level(
+			String(PokeCharacters.mon_for(char_id).get("growth", "medium")),
+			PokeLevels.START_LEVEL)
+	pending_evolution = {}
 
 	var cdef: Dictionary = CardLibrary.character(char_id)
 	max_hp = int(cdef["max_hp"])
@@ -249,10 +269,85 @@ func is_pokemon_run() -> bool:
 
 
 ## The species record behind the current run, or {} for Ironclad and Silent.
+## After an evolution this is the *evolved* species: evolving rewrites
+## `character`, so everything downstream — stats, types, card pool — follows.
 func player_mon() -> Dictionary:
 	if not is_pokemon_run():
 		return {}
 	return PokeCharacters.mon_for(character)
+
+
+# ──────────────────────────────── Levelling ───────────────────────────────────
+signal levelled_up(level: int)
+signal evolution_available(branches: Array)
+
+
+func growth_rate() -> String:
+	var mon := player_mon()
+	return String(mon.get("growth", "medium")) if not mon.is_empty() else "medium"
+
+
+func xp_to_next() -> int:
+	if player_level >= PokeLevels.MAX_LEVEL:
+		return 0
+	return PokeLevels.xp_for_level(growth_rate(), player_level + 1) - player_xp
+
+
+func level_progress() -> float:
+	return PokeLevels.level_progress(growth_rate(), player_xp)
+
+
+## Grants experience and applies any level-ups. Returns how many levels were
+## gained, so the reward screen can say so.
+func award_xp(amount: int) -> int:
+	if not is_pokemon_run() or amount <= 0:
+		return 0
+	player_xp += amount
+	var was := player_level
+	player_level = PokeLevels.level_for_xp(growth_rate(), player_xp)
+	if player_level <= was:
+		return 0
+	_apply_level(was)
+	return player_level - was
+
+
+## Levelling raises Max HP by the difference the formula gives, and heals by the
+## same amount — you do not gain a level and stay hurt.
+func _apply_level(previous_level: int) -> void:
+	var mon := player_mon()
+	if mon.is_empty():
+		return
+	var before := PokeBalance.player_hp(mon, previous_level)
+	var after := PokeBalance.player_hp(mon, player_level)
+	var gain: int = max(0, after - before)
+	max_hp = after
+	hp = min(max_hp, hp + gain)
+	hp_changed.emit(hp, max_hp)
+	levelled_up.emit(player_level)
+	var branches := PokeEvolution.available(String(mon["name"]), player_level)
+	if not branches.is_empty():
+		evolution_available.emit(branches)
+
+
+## Swaps the run's species for one it evolves into. The deck comes along
+## untouched — they are moves, and the evolved form knows them — but the stat
+## line, typing and future card pool are the new species'.
+func evolve_into(species_name: String) -> bool:
+	if not is_pokemon_run():
+		return false
+	var mon := PokeData.mon(species_name)
+	if mon.is_empty():
+		return false
+	var ratio := float(hp) / float(max(1, max_hp))
+	character = PokeCharacters.character_id(species_name)
+	max_hp = PokeBalance.player_hp(mon, player_level)
+	# Evolving is a reward, so it heals as well as growing the pool.
+	hp = clampi(int(round(max_hp * maxf(ratio, 0.5))), 1, max_hp)
+	pending_evolution = {}
+	PokeCharacters.forget(character)
+	hp_changed.emit(hp, max_hp)
+	deck_changed.emit()
+	return true
 
 
 ## Rarity-weighted card ids for a combat reward.
@@ -267,8 +362,15 @@ func random_card_ids(count: int, allow_colorless: bool = true) -> Array:
 				and rng.randf() < 0.05
 		var color := "colorless" if use_colorless else card_color()
 		var rarity := _roll_card_rarity()
-		var pool: Array = CardLibrary.colorless_pool(rarity) if use_colorless \
-				else CardLibrary.pool_for(color, rarity)
+		# Most rewards are gated to what the party could plausibly know; a few
+		# reach past it into the rest of the learnset, and elites do so often.
+		var pool: Array = []
+		if use_colorless:
+			pool = CardLibrary.colorless_pool(rarity)
+		elif is_pokemon_run() and PokeCharacters.rolls_off_gate(last_encounter_role, rng):
+			pool = PokeCharacters.reward_pool(character, rarity, 0)
+		else:
+			pool = CardLibrary.pool_for(color, rarity)
 		# Not every colour has cards at every rarity (there are no common
 		# Colorless cards), so widen the search until something is available.
 		if pool.is_empty():
@@ -336,6 +438,39 @@ func enter_node(idx: int) -> void:
 	floor_num += 1
 
 
+## How far through the whole run this is, 0 at the first floor and 1 at the
+## last. Drives the opponent BST cap and the level the dungeon fields, so both
+## stretch automatically if the run gets longer or shorter.
+func total_floors() -> int:
+	return ACTS * (MapGen.ROWS + 1)
+
+
+func progress() -> float:
+	return clampf(float(floor_num) / float(max(1, total_floors())), 0.0, 1.0)
+
+
+## The level the dungeon is fighting at right now.
+##
+## It tracks the *party*, not the floor count. Driving it from progress alone let
+## the curve outrun the experience the player was actually earning — by the Act 1
+## boss the dungeon was eight levels ahead and the fight was a wall. The floor
+## curve is kept as a lower bound so the dungeon still climbs for a player who
+## skips fights, but the party's own level is what it matches.
+func dungeon_level() -> int:
+	var t := progress()
+	var by_floor := float(PokeLevels.START_LEVEL) \
+			+ (DUNGEON_END_LEVEL - PokeLevels.START_LEVEL) * t
+	var floor_bound := int(round(by_floor * 0.75))
+	var lvl: int = max(player_level, floor_bound) if is_pokemon_run() else int(round(by_floor))
+	return clampi(lvl, PokeLevels.START_LEVEL, PokeLevels.MAX_LEVEL)
+
+
+## Level for one encounter slot: elites and bosses are ahead of the curve, which
+## is what makes them worth the relic.
+func level_for_role(role: String) -> int:
+	return PokeLevels.role_level(dungeon_level(), role)
+
+
 func at_boss() -> bool:
 	return current_node >= 0 and String(node_at(current_node).get("type", "")) == "boss"
 
@@ -343,7 +478,7 @@ func at_boss() -> bool:
 func advance_act() -> bool:
 	bosses_slain += 1
 	run_score += 100 * act
-	if act >= 3:
+	if act >= ACTS:
 		return false
 	new_act(act + 1)
 	return true
@@ -359,6 +494,7 @@ func encounter_for_node(node_type: String) -> Array:
 	else:
 		var early := visited_nodes.size() <= 3 and act == 1
 		group = EncounterLibrary.pick(act, "weak" if early else "strong", rng, recent_encounters)
+	last_encounter_role = node_type
 	recent_encounters.append(",".join(group))
 	if recent_encounters.size() > 3:
 		recent_encounters.pop_front()
@@ -683,6 +819,10 @@ func save_run() -> void:
 		"elites": elites_slain, "bosses": bosses_slain, "score": run_score,
 		"rare_chance": card_rare_chance, "shop_removals": shop_removals,
 		"events_used": event_pool_used,
+		# Without these a restored run keeps its evolved species but drops back to
+		# the starting level, which would rewrite its stats and its card pool.
+		"player_level": player_level, "player_xp": player_xp,
+		"encounter_role": last_encounter_role,
 	}
 	var f := FileAccess.open(SAVE_PATH, FileAccess.WRITE)
 	if f != null:
@@ -719,6 +859,13 @@ func load_run() -> bool:
 	card_rare_chance = float(d.get("rare_chance", 0.03))
 	shop_removals = int(d.get("shop_removals", 0))
 	event_pool_used = (d.get("events_used", []) as Array).duplicate()
+	player_level = int(d.get("player_level", PokeLevels.START_LEVEL))
+	player_xp = int(d.get("player_xp", 0))
+	last_encounter_role = String(d.get("encounter_role", "monster"))
+	# An older save, or a Spire run, has no level recorded; derive one so the
+	# stat formula still has something sane to work with.
+	if player_xp <= 0 and is_pokemon_run():
+		player_xp = PokeLevels.xp_for_level(growth_rate(), player_level)
 	rng = RandomNumberGenerator.new()
 	rng.seed = seed_value
 	rng.state = randi()

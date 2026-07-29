@@ -49,9 +49,23 @@ static func mon_for(id: String) -> Dictionary:
 
 
 # ═══════════════════════════════ Definitions ═════════════════════════════════
-static func get_def(id: String) -> Dictionary:
+## Card pools are keyed by character id and go stale when a run evolves into a
+## new species. Called by RunState.evolve_into.
+static func forget(id: String) -> void:
+	for key in _pool_cache.keys():
+		if String(key).begins_with(id + "|"):
+			_pool_cache.erase(key)
+
+
+static func get_def(id: String, level: int = -1) -> Dictionary:
+	# Max HP moves with the level, so it is computed per call; everything else
+	# about a species is fixed and cached.
+	var lvl := level if level > 0 else _current_level_for(id)
 	if _cache.has(id):
-		return _cache[id]
+		var cached: Dictionary = (_cache[id] as Dictionary).duplicate()
+		cached["max_hp"] = PokeBalance.player_hp(mon_for(id), lvl)
+		cached["level"] = lvl
+		return cached
 	var mon := mon_for(id)
 	if mon.is_empty():
 		return {}
@@ -59,7 +73,8 @@ static func get_def(id: String) -> Dictionary:
 	var d := {
 		"name": PokeData.display_name(String(mon["name"])),
 		"color": COLOR,
-		"max_hp": PokeBalance.player_hp(mon),
+		"max_hp": PokeBalance.player_hp(mon, lvl),
+		"level": lvl,
 		# Every Pokemon run starts with the same relic; the species is already
 		# the interesting variable.
 		"relic": "burning_blood",
@@ -71,7 +86,16 @@ static func get_def(id: String) -> Dictionary:
 		"stats": mon["stats"],
 	}
 	_cache[id] = d
-	return d
+	return d.duplicate()
+
+
+## The level to report for a character. The one being played uses the run's
+## live level; anything else (the picker listing 1025 species) uses the level a
+## run would start at, so the list is comparing like with like.
+static func _current_level_for(id: String) -> int:
+	if Engine.get_main_loop() != null and Run != null and Run.character == id:
+		return Run.player_level
+	return PokeLevels.START_LEVEL
 
 
 static func _blurb(mon: Dictionary) -> String:
@@ -197,10 +221,28 @@ static func _fallback_deck() -> Array:
 
 
 # ════════════════════════════════ Reward pool ════════════════════════════════
-## Everything this species can learn by any method, which is what card rewards,
-## shops and the "add a card" events draw from.
-static func reward_pool(character_id: String, rarity: String = "") -> Array:
-	var key := "%s|%s" % [character_id, rarity]
+## How far above the current level a level-up move can still be offered. A
+## little slack keeps rewards from drying up between levels.
+const LEVEL_GATE_SLACK := 4
+
+## Chance that a reward ignores the level gate entirely and offers anything from
+## the whole learnset — the lucky Hyper Beam at level 12. Elites are where you go
+## looking for that, so they are far more generous.
+const OFF_GATE_CHANCE := {"monster": 0.06, "elite": 0.35, "boss": 0.25}
+
+
+## The moves this species can be offered right now.
+##
+## Rewards roll from what it could plausibly know: level-up moves at or below its
+## level, plus everything it can be taught. The pool genuinely widens as the run
+## goes on, and widens again on evolution, because the evolved species has a
+## longer learnset.
+##
+## `level` of 0 means "no gate" — the whole learnset, used for the off-gate roll.
+static func reward_pool(character_id: String, rarity: String = "",
+		level: int = -1) -> Array:
+	var gate := level if level >= 0 else _current_level_for(character_id)
+	var key := "%s|%s|%d" % [character_id, rarity, gate]
 	if _pool_cache.has(key):
 		return _pool_cache[key]
 	var mon := mon_for(character_id)
@@ -208,26 +250,49 @@ static func reward_pool(character_id: String, rarity: String = "") -> Array:
 	if mon.is_empty():
 		_pool_cache[key] = out
 		return out
-	for row in mon.get("learnset", []):
-		var mv := PokeData.move_at(int(row[0]))
-		if mv.is_empty():
-			continue
-		var card_id := PokeMoves.card_id(String(mv["name"]))
-		var d := PokeMoves.get_def(card_id)
-		if d.is_empty() or (d["effects"] as Array).is_empty():
-			continue
-		# Rarity depends on how the move is learnt, so it is computed here
-		# rather than being baked into the shared card definition.
-		var r := PokeBalance.card_rarity(mv, int(row[1]), int(row[2]))
-		if r == "basic":
-			continue
-		if rarity != "" and r != rarity:
-			continue
-		if not out.has(card_id):
-			out.append(card_id)
+
+	# Evolving mid-run should not strand you with a pool built for the form you
+	# have outgrown, so anything further down the line counts as learnable too.
+	var learnsets: Array = [mon]
+	for later in PokeEvolution.line_from(String(mon["name"])):
+		var m := PokeData.mon(later)
+		if not m.is_empty():
+			learnsets.append(m)
+
+	for source in learnsets:
+		for row in source.get("learnset", []):
+			var mv := PokeData.move_at(int(row[0]))
+			if mv.is_empty():
+				continue
+			var method := int(row[2])
+			var learn_level := PokeBalance.learn_level(mv, int(row[1]), method)
+			# The gate. Machine and tutor moves are gated too, on an implied
+			# level — see PokeBalance.learn_level — or a level 5 starter could be
+			# handed Fire Blast on the first floor.
+			if gate > 0 and learn_level > gate + LEVEL_GATE_SLACK:
+				continue
+			var card_id := PokeMoves.card_id(String(mv["name"]))
+			var d := PokeMoves.get_def(card_id)
+			if d.is_empty() or (d["effects"] as Array).is_empty():
+				continue
+			# Rarity depends on how the move is learnt, so it is computed here
+			# rather than being baked into the shared card definition.
+			var r := PokeBalance.card_rarity(mv, learn_level, method)
+			if r == "basic":
+				continue
+			if rarity != "" and r != rarity:
+				continue
+			if not out.has(card_id):
+				out.append(card_id)
 	out.sort()
 	_pool_cache[key] = out
 	return out
+
+
+## Rolls whether this reward ignores the level gate. Elites are where the
+## out-of-reach moves come from.
+static func rolls_off_gate(role: String, rng: RandomNumberGenerator) -> bool:
+	return rng.randf() < float(OFF_GATE_CHANCE.get(role, 0.06))
 
 
 ## Rarity of a card for the Pokemon currently being played. The same move can be

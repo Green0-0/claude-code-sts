@@ -16,11 +16,15 @@ var alive: bool = true
 ## Pokemon-only. Empty for the Spire's own cast, and every Pokemon rule checks
 ## for that: a Cultist has no types to be weak to and no Defense to soak with.
 var poke_name: String = ""
-var poke_stats: Dictionary = {}    ## hp/atk/df/spa/spd/spe base stats
+var poke_stats: Dictionary = {}    ## hp/atk/df/spa/spd/spe *base* stats
 var poke_types: Array = []         ## e.g. ["water", "flying"]
-## Multiplier on this actor's offensive and defensive stats. Only ever above 1
-## for a player running a below-band species — see PokeBalance.trainer_scale.
-var stat_scale: float = 1.0
+var level: int = PokeLevels.START_LEVEL
+
+## ── Active Time Battle ──────────────────────────────────────────────────────
+## Charge fills at a rate set by Speed; at Combat.CHARGE_FULL this actor acts.
+## Turn order is therefore emergent rather than a fixed player/enemy alternation:
+## something twice as fast genuinely acts twice as often.
+var charge: float = 0.0
 var last_hit_taken: int = 0        ## unblocked damage from the last move that hit
 var last_hit_class: String = ""    ## "physical" / "special", for Counter et al
 
@@ -69,9 +73,17 @@ func is_pokemon() -> bool:
 	return poke_name != ""
 
 
-## Base stat lookup with a sane default, so shared damage code can ask any actor.
+## The species' printed base stat — the number on a dex page, level-independent.
 func base_stat(key: String, fallback: int = 50) -> int:
 	return int(poke_stats.get(key, fallback))
+
+
+## The stat this actor actually fights with, grown to its level. Every rule that
+## reads Attack, Defense or Speed wants this one, not the base.
+func stat(key: String, fallback: int = 50) -> int:
+	if poke_stats.is_empty():
+		return fallback
+	return PokeLevels.stat_at(base_stat(key, fallback), level, key == "hp")
 
 
 ## Stat stages live in the same status bag as everything else, prefixed so they

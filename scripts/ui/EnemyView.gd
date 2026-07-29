@@ -24,6 +24,10 @@ var combat: Combat = null
 var index: int = 0
 var targeted: bool = false
 
+## The ATB gauge. Built in code rather than in the scene so the bar sits directly
+## under whatever height the HP bar ends up at.
+var charge_bar: ProgressBar = null
+
 
 func _ready() -> void:
 	custom_minimum_size = VIEW_SIZE
@@ -33,6 +37,10 @@ func _ready() -> void:
 	mouse_entered.connect(func(): hover_changed.emit(self, true))
 	mouse_exited.connect(func(): hover_changed.emit(self, false))
 	target_ring.visible = false
+	charge_bar = UiTheme.make_charge_bar()
+	charge_bar.position = Vector2(hp_bar.position.x, hp_bar.position.y + hp_bar.size.y + 3)
+	charge_bar.size = Vector2(hp_bar.size.x, 6)
+	add_child(charge_bar)
 
 
 func setup(a: Actor, cmb: Combat, idx: int) -> void:
@@ -119,6 +127,11 @@ func refresh() -> void:
 	block_label.visible = actor.block > 0
 	block_label.text = "🛡 %d" % actor.block
 	target_ring.visible = targeted
+	if charge_bar != null and combat != null:
+		charge_bar.value = combat.charge_ratio(actor) * 100.0
+		# It brightens as it fills, so a nearly-ready enemy reads at a glance.
+		charge_bar.modulate = Color(1, 1, 1).lerp(
+				Color(1.0, 0.85, 0.45), combat.charge_ratio(actor))
 
 	# Intent
 	var kind := String(actor.intent.get("kind", ""))

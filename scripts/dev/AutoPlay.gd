@@ -50,7 +50,8 @@ func _ready() -> void:
 		immortal = true
 	target_runs = 8 if immortal else 1
 	report = {"combats": 0, "cards_played": 0, "turns": 0, "rooms": {}, "runs": 0,
-			"enemies": {}, "cards": {}, "relics": {}, "acts_reached": 1, "errors": []}
+			"enemies": {}, "cards": {}, "relics": {}, "acts_reached": 1, "errors": [],
+			"evolutions": 0, "max_level": 0}
 	print("[autoplay] starting (immortal=%s, runs=%d)" % [immortal, target_runs])
 
 
@@ -106,6 +107,8 @@ func _tick() -> void:
 			_drive_rest()
 		"EventScreen":
 			_drive_event()
+		"EvolutionScreen":
+			_drive_evolution()
 		"GameOverScreen":
 			runs_done += 1
 			report["runs"] = runs_done
@@ -117,6 +120,16 @@ func _tick() -> void:
 				main._on_restart()
 
 
+## Always evolves. The alternative branch is "stay as you are", which would let
+## a run coast without ever testing the evolution path.
+func _drive_evolution() -> void:
+	var options: Array = main.evolution_screen.options_box.get_children()
+	if options.is_empty():
+		return
+	report["evolutions"] = int(report.get("evolutions", 0)) + 1
+	(options[0] as Button).emit_signal("pressed")
+
+
 func _signature() -> String:
 	var s := "%s|%d" % [main.current_screen.name if main.current_screen else "?", Run.floor_num]
 	if main.current_screen == main.combat_screen and main.combat_screen.combat != null:
@@ -125,6 +138,7 @@ func _signature() -> String:
 				c.discard_pile.size()]
 	if main.card_picker.visible:
 		s += "|picker%d" % main.card_picker._selection.size()
+	s += "|lv%d" % Run.player_level
 	return s
 
 
@@ -214,6 +228,7 @@ func _drive_combat() -> void:
 	if immortal:
 		c.player.hp = c.player.max_hp
 		Run.hp = Run.max_hp
+	report["max_level"] = maxi(int(report.get("max_level", 0)), Run.player_level)
 	for e in c.living_enemies():
 		_bump("enemies", e.enemy_id)
 	if randf() < 0.03:
@@ -324,6 +339,8 @@ func _finish(reason: String) -> void:
 	print("[autoplay] rooms=%s" % JSON.stringify(report["rooms"]))
 	print("[autoplay] combats=%d cards_played=%d turns=%d" % [int(report["combats"]),
 			int(report["cards_played"]), int(report["turns"])])
+	print("[autoplay] evolutions=%d max_level=%d" % [
+			int(report.get("evolutions", 0)), int(report.get("max_level", 0))])
 	print("[autoplay] distinct_enemies=%d distinct_cards=%d distinct_relics=%d" % [
 			(report["enemies"] as Dictionary).size(), (report["cards"] as Dictionary).size(),
 			(report["relics"] as Dictionary).size()])

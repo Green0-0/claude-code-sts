@@ -36,6 +36,13 @@ func _rebuild() -> void:
 		btn.add_theme_font_size_override("font_size", 18)
 		btn.focus_mode = Control.FOCUS_NONE
 		match String(r["kind"]):
+			"xp":
+				# Already applied when the fight ended; this row is the receipt.
+				var levels := int(r.get("levels", 0))
+				btn.text = "✦  %d EXP" % int(r["amount"])
+				if levels > 0:
+					btn.text += "   —   Level %d!" % int(r.get("level", 0))
+				btn.disabled = true
 			"gold":
 				btn.text = "💰  %d Gold" % int(r["amount"])
 			"cards":

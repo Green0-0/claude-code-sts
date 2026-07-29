@@ -112,6 +112,29 @@ static func style_hp_bar(bar: ProgressBar) -> void:
 	bar.add_theme_stylebox_override("fill", fill)
 
 
+## The ATB charge gauge: a thin sliver under a combatant's health, filling from
+## empty to ready. Deliberately a different shape and colour from the HP bar, so
+## "about to act" never reads as "about to die".
+static func make_charge_bar() -> ProgressBar:
+	var bar := ProgressBar.new()
+	bar.max_value = 100.0
+	bar.value = 0.0
+	bar.show_percentage = false
+	bar.mouse_filter = Control.MOUSE_FILTER_IGNORE
+
+	var bg := StyleBoxFlat.new()
+	bg.bg_color = Color(0.12, 0.11, 0.17)
+	bg.border_color = Color(0.30, 0.28, 0.40)
+	bg.set_border_width_all(1)
+	bg.set_corner_radius_all(3)
+	var fill := StyleBoxFlat.new()
+	fill.bg_color = Color(0.62, 0.80, 0.95)
+	fill.set_corner_radius_all(3)
+	bar.add_theme_stylebox_override("background", bg)
+	bar.add_theme_stylebox_override("fill", fill)
+	return bar
+
+
 ## A round, gold-rimmed panel for the energy orb.
 static func orb_style() -> StyleBoxFlat:
 	var sb := StyleBoxFlat.new()

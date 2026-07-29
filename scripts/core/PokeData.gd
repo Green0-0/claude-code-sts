@@ -17,6 +17,7 @@ extends RefCounted
 const MONS_PATH := "res://data/pokemon.json"
 const MOVES_PATH := "res://data/moves.json"
 const TYPES_PATH := "res://data/types.json"
+const EVO_PATH := "res://data/evolution.json"
 
 ## Learn-method codes, matching METHOD_CODES in tools/build_data.py.
 const LEARN_LEVEL := 0
@@ -30,6 +31,8 @@ static var _types: Array = []
 static var _chart: Dictionary = {}
 static var _mon_by_name: Dictionary = {}
 static var _move_by_name: Dictionary = {}
+static var _evo_chains: Dictionary = {}
+static var _growth: Dictionary = {}
 static var _loaded: bool = false
 static var _available: bool = false
 
@@ -61,6 +64,12 @@ static func ensure_loaded() -> void:
 		_mon_by_name[String(_mons[i]["name"])] = i
 	for i in range(_moves.size()):
 		_move_by_name[String(_moves[i]["name"])] = i
+	# Evolution and XP curves are optional: without them the game still runs,
+	# it just never levels anything up.
+	var evo = _read_json(EVO_PATH)
+	if evo != null:
+		_evo_chains = evo.get("chains", {})
+		_growth = evo.get("growth", {})
 	_available = _mons.size() > 0 and _moves.size() > 0
 
 
@@ -141,6 +150,19 @@ static func display_name(raw: String) -> String:
 	for p in parts:
 		out.append((p as String).capitalize())
 	return " ".join(out)
+
+
+## Branches this species can evolve into: [{to, level, trigger}, ...], earliest
+## first. Empty for anything at the end of its line.
+static func evolutions_of(name: String) -> Array:
+	ensure_loaded()
+	return _evo_chains.get(name, [])
+
+
+## Total XP needed to reach a level on a given growth curve.
+static func xp_table(growth: String) -> Array:
+	ensure_loaded()
+	return _growth.get(growth, _growth.get("medium", []))
 
 
 # ═══════════════════════════════ The type chart ══════════════════════════════

@@ -25,7 +25,7 @@ The main scene is `scenes/Main.tscn`.
 
 ```bash
 godot --headless -- --rules-test   # 69 assertions on the combat maths
-godot --headless -- --poke-test    # 159 assertions on the Pokémon layer
+godot --headless -- --poke-test    # 220 assertions on the Pokémon layer
 godot --headless -- --smoke        # one self-played run, prints a report
 godot --headless -- --smoke-deep   # 8 runs, immortal player, full 3-act coverage
 godot --headless -- --smoke-poke   # 8 self-played Pokémon runs
@@ -56,9 +56,13 @@ clears, 168 combats, 2326 cards played, 166 distinct species fought, zero
 errors.** It clears fewer runs than the Spire harness by design — see
 [difficulty](#difficulty-is-not-flat-by-design).
 
-Note that `--click-test` needs an otherwise idle machine: it synthesizes mouse
-events and waits a frame between each, so a `--smoke-*` run in the background will
-make it fail spuriously and non-deterministically.
+**Run the suites one at a time.** Two of them fail spuriously against a busy
+machine, in ways that look like real bugs:
+
+* `--click-test` synthesizes mouse events and waits a frame between each, so a
+  `--smoke-*` run in the background starves it and hit-testing misses.
+* `--poke-test` exercises save/continue, and every suite shares the one
+  `user://spire_save.json`. A concurrent `--smoke-*` overwrites it mid-test.
 
 ---
 
@@ -252,18 +256,81 @@ not by difficulty. Now, as in the games, a Pokémon with no move that will land
 resorts to **Struggle**, which is typeless and always connects. Enemies get the
 same fallback, so no fight can stall forever.
 
+### Levels, experience and evolution
+
+Every combatant has a real level, and stats come from the main-series formula
+(`floor((2·base + IV)·level/100) + level + 10` for HP, `+ 5` for the rest, with a
+flat average IV of 15 and no EVs). That formula self-balances: HP and the
+offensive stats grow together, so a fight at level 40 takes about as many turns
+as one at level 8, which is what lets the dungeon level up alongside you.
+
+* **Experience** uses each species' real growth curve — all six are imported, so
+  a Slow-curve legendary genuinely takes longer than a Fast-curve Rattata. XP
+  from a kill scales with the level felled and the role (×1.6 elite, ×2.5 boss).
+* **Levelling** raises Max HP by the formula's difference and heals by the same
+  amount, then checks for an evolution.
+* **Evolution** comes from the imported chains — 457 evolving species, 484
+  branches. Triggers a dungeon cannot reproduce (trade, stones, friendship,
+  walking 10,000 steps) are folded onto level thresholds by `build_data.py`.
+  Branching lines keep every branch and you pick: Eevee offers all eight.
+  Evolving keeps your deck, swaps the stat line and typing, and widens the card
+  pool — which is how a weak starter keeps up. Magikarp becomes Gyarados at 20.
+* Declining an evolution is a real option, and the offer returns next level.
+
+### Card rewards open up as you level
+
+Rewards roll from what your Pokémon could plausibly know: level-up moves at or
+below its level (plus a little slack), and machine/egg/tutor moves gated on an
+*implied* level derived from their power — otherwise a level 5 Charmander could
+be handed Fire Blast on the first floor and delete the act. Charmander's pool is
+**19 moves at level 5 and 110 at level 60**, and widens again on evolution
+because the evolved form's learnset counts too.
+
+A small chance ignores the gate entirely and offers anything from the whole
+learnset — **6% normally, 33% from an elite** — which is what makes elites worth
+detouring for.
+
+### Active Time Battle
+
+Turn order is no longer an alternation. Every combatant has a charge gauge that
+fills at a rate set by its **effective Speed** (base stat grown to level, times
+Speed stage, quartered by paralysis); when a gauge fills, that combatant acts and
+spends it, keeping any overflow. Order is emergent: over one fight a Jolteon acts
+**15 times to a Slowpoke's 5**.
+
+The engine is stepped by the UI rather than a real clock, so headless and played
+runs resolve identically. Upkeep that used to happen in a batch at the end of an
+enemy phase — Ritual, Metallicize, Regen, status decay, poison and ailment ticks
+— is now per-actor at its own turn, so a fast enemy really does get its Ritual
+strength twice as often as a slow one. The old pre-emptive-strike special case is
+gone; being outsped is simply the gauge filling later. One guarantee remains: a
+player who has not yet acted cannot be killed, so you always get your first turn.
+
 ### Encounters depend on BST
 
-Nothing is hand-listed. Every species carries a weight in every (act, encounter
-kind) slot, and that weight is a **bell curve over its base stat total** centred on
-a band that climbs through the dungeon — Act 1 "weak" centres on 300 BST, Act 3
-"boss" on 660. So Rattata is 0.23% of Act 1's weak table and Dragonite is
-0.00002%; by the Act 3 boss slot that is inverted. Legendaries and mythicals are
-excluded everywhere except boss slots (and late elites, at reduced odds), and
-low-BST species arrive in packs of two or three.
+Nothing is hand-listed. Every species carries a weight in every slot, and that
+weight is a **bell curve over its base stat total** centred on a cap that climbs
+with how far through the run you are — not with the act number, so the slope
+stretches automatically if the run length changes.
 
-`PokeEncounters.probability(name, act, kind)` returns the actual percentage, and
-`top_candidates(act, kind)` lists the likeliest — both are asserted on by
+The run opens genuinely low, around **210 BST** for a normal encounter — the
+Caterpie and Rattata end of the dex — so a player who picked a weak starter is
+not immediately outclassed. It climbs on an eased curve to **680**, and anything
+above the running cap is excluded outright rather than merely unlikely. Dragonite
+cannot appear on the first floor at any probability; by the end, wild legendaries
+do (Zapdos at 0.34% of a late "strong" slot), and boss slots reach past that.
+
+Levels climb on the same progress: the dungeon fields level 5 on the first floor
+and level 55 on the last, with elites +3 and bosses +6. A mob only knows moves
+its level says it knows, so an Act 1 Deerling cannot open with the level-40
+Double-Edge it eventually learns — and the same species met in Act 4 is genuinely
+more dangerous rather than simply having more HP.
+
+The run is four acts rather than three, for a longer climb with room to evolve
+twice.
+
+`PokeEncounters.probability(name, progress, kind)` returns the actual percentage,
+and `top_candidates(progress, kind)` lists the likeliest — both are asserted on by
 `--poke-test`.
 
 ### Move functionality
@@ -294,20 +361,45 @@ while asleep, **Yawn** matures into Sleep, **Heal Block** stops healing and
 **Embargo** seals potions. All seven **stat stages** are modelled at the real
 ±50%-per-step multipliers, capped at ±6, and Artifact can shrug off a drop.
 
+### Not built yet
+
+Three pieces of the intended design are not in the game. They are listed here
+rather than half-implemented, because each one changes the same code paths and a
+partial version would break what does work:
+
+* **Enemies do not use cards.** They still pick a move from a table and resolve
+  it. Giving them their own energy, decks drawn from their learnsets, and the
+  same card animations is the next step, and the ATB engine is the prerequisite
+  that is now in place.
+* **The party is a party of one.** Multi-character play — layered hands with the
+  active character's cards in front and the rest shadowed behind, swapping on
+  character change, allies targetable by any card — is not started. This is what
+  `PACK_SCALE` is currently propping up: one body against two or three loses the
+  trade on arithmetic, so player HP carries an interim ×2.6 that should come back
+  down to about ×1.4 once both sides field three.
+* **The art pass has not happened.** The look is still the functional
+  Spire-derived theme, not the kawaii dark-fairytale one. Note that this project
+  has no raster assets and no way to author them here, so that work has to be
+  procedural: theme and palette, `_draw` on the card and actor views, gradients
+  and shaders, particles and tweens.
+
 ### Where it lives
 
 ```
 tools/fetch_pokeapi.py   mirrors the API into .pokecache/
 tools/build_data.py      compacts the cache into data/*.json
 scripts/core/
-  PokeData.gd            loads data/, answers the type chart
+  PokeData.gd            loads data/, answers the type chart and evolution chains
   PokeBalance.gd         every Pokémon-number → Spire-number conversion
+  PokeLevels.gd          the stat formula, XP curves and level maths
+  PokeEvolution.gd       evolution branches, thresholds and whole-line lookups
   PokeMoves.gd           move → card definition, including computed power
   PokeMobs.gd            species → enemy definition, moveset and AI
   PokeCharacters.gd      species → playable character, deck and reward pool
   PokeEncounters.gd      BST-weighted encounter tables
-scripts/ui/PokemonSelect.gd   searchable dex picker
-scripts/dev/PokeTest.gd       159 assertions over the whole layer
+scripts/ui/PokemonSelect.gd    searchable dex picker
+scripts/ui/EvolutionScreen.gd  the evolution offer
+scripts/dev/PokeTest.gd       220 assertions over the whole layer
 scripts/dev/Shot.gd           --poke-shots, one PNG per Pokémon-mode screen
 ```
 

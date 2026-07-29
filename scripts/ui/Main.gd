@@ -16,6 +16,7 @@ const OVERLAY_Z := 1000
 @onready var shop_screen: Control = $Screens/ShopScreen
 @onready var rest_screen: Control = $Screens/RestScreen
 @onready var event_screen: Control = $Screens/EventScreen
+@onready var evolution_screen: Control = $Screens/EvolutionScreen
 @onready var gameover_screen: Control = $Screens/GameOverScreen
 @onready var gameover_title: Label = $Screens/GameOverScreen/TitleLabel
 @onready var gameover_stats: Label = $Screens/GameOverScreen/StatsLabel
@@ -31,6 +32,7 @@ var _picker_row: int = -1
 var _pending_event_request: String = ""
 var _room_type: String = "monster"
 var _toast_timer: Timer = null
+var _pending_evolution: Array = []
 
 
 func _ready() -> void:
@@ -59,6 +61,7 @@ func _ready() -> void:
 	rest_screen.finished.connect(_return_to_map)
 	event_screen.option_chosen.connect(_on_event_option)
 	event_screen.finished.connect(_return_to_map)
+	evolution_screen.chosen.connect(_on_evolution_chosen)
 	gameover_button.pressed.connect(_on_restart)
 	card_picker.confirmed.connect(_on_picker_confirmed)
 	card_picker.cancelled.connect(_on_picker_cancelled)
@@ -209,6 +212,14 @@ func _on_combat_over(victory: bool) -> void:
 	if _room_type == "elite":
 		Run.elites_slain += 1
 	var rewards: Array = []
+	# Experience first: levelling can raise Max HP and open an evolution, and
+	# both should be settled before the reward cards are rolled, since the card
+	# pool is gated on level.
+	var xp: int = combat_screen.xp_earned()
+	if xp > 0:
+		var gained := Run.award_xp(xp)
+		rewards.append({"kind": "xp", "amount": xp, "levels": gained,
+				"level": Run.player_level})
 	rewards.append({"kind": "gold", "amount": Run.combat_gold_reward(_room_type)})
 	var card_count := 3
 	var ids := Run.random_card_ids(card_count)
@@ -231,6 +242,50 @@ func _on_combat_over(victory: bool) -> void:
 
 
 func _on_rewards_finished() -> void:
+	# An evolution offer interrupts the walk back to the map — it is the most
+	# interesting thing that can happen to a run, so it gets its own moment.
+	if _offer_evolution():
+		return
+	if _room_type == "boss":
+		_after_boss()
+		return
+	_return_to_map()
+
+
+## Puts the evolution choice up if one is waiting. Branching lines (Eevee's
+## eight) become a pick; a single branch is still a choice, because evolving is
+## not always what you want — the unevolved form levels faster.
+func _offer_evolution() -> bool:
+	if not Run.is_pokemon_run():
+		return false
+	var mon := Run.player_mon()
+	if mon.is_empty():
+		return false
+	var branches := PokeEvolution.available(String(mon["name"]), Run.player_level)
+	if branches.is_empty():
+		return false
+	_pending_evolution = branches
+	var options: Array = []
+	for b in branches:
+		options.append(PokeEvolution.describe(b))
+	options.append("Not yet — stay as %s" % PokeData.display_name(String(mon["name"])))
+	evolution_screen.show_choice(
+			"%s is evolving!" % PokeData.display_name(String(mon["name"])), options)
+	_show(evolution_screen)
+	return true
+
+
+func _on_evolution_chosen(index: int) -> void:
+	if index >= 0 and index < _pending_evolution.size():
+		var branch: Dictionary = _pending_evolution[index]
+		var to := String(branch.get("to", ""))
+		if Run.evolve_into(to):
+			show_toast("It evolved into %s!" % PokeData.display_name(to))
+	else:
+		# Declining is remembered only until the next level, so the offer comes
+		# back rather than being lost for the run.
+		show_toast("It stopped evolving.")
+	_pending_evolution = []
 	if _room_type == "boss":
 		_after_boss()
 		return
@@ -238,7 +293,7 @@ func _on_rewards_finished() -> void:
 
 
 func _after_boss() -> void:
-	if Run.act >= 3:
+	if Run.act >= Run.ACTS:
 		_game_over(true)
 		return
 	if Run.advance_act():

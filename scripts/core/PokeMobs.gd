@@ -19,14 +19,10 @@ const ROLE_SUFFIX := {"_elite": "elite", "_boss": "boss"}
 ## interesting for longer.
 const MOVE_COUNT := {"normal": 4, "elite": 5, "boss": 6}
 
-## The level an encounter is treated as being, which caps the moves it knows.
-##
-## Without this every wild Deerling would open with the level-40 Double-Edge it
-## eventually learns, and a normal Act 1 fight would be lethal on turn one. A
-## normal encounter is roughly the player's own starting level; elites and
-## bosses have grown into their movepools. Difficulty across acts still comes
-## from BST — later acts field stronger species, not better-read ones.
-const MOVE_LEVEL_CAP := {"normal": 22, "elite": 38, "boss": 100}
+## A mob knows what its level says it knows — no more. This is why an Act 1
+## Deerling cannot open with the level-40 Double-Edge it eventually learns, and
+## why the same species met again in Act 4 is genuinely more dangerous rather
+## than simply having more HP.
 
 static var _cache: Dictionary = {}
 
@@ -66,24 +62,41 @@ static func mon_for(id: String) -> Dictionary:
 
 
 # ═══════════════════════════════ Definitions ═════════════════════════════════
+## The level a mob of this role spawns at, from how far into the run it is.
+static func _level_for(role: String) -> int:
+	if Engine.get_main_loop() != null and Run != null and Run.is_pokemon_run():
+		return Run.level_for_role(role)
+	# Outside a run — menus, the dex picker, tests — the dungeon has not started
+	# climbing yet, but an elite is still an elite.
+	return PokeLevels.role_level(PokeLevels.START_LEVEL, role)
+
+
 static func get_def(id: String) -> Dictionary:
-	if _cache.has(id):
-		return _cache[id]
+	# Definitions depend on the dungeon's current level, so the cache is keyed by
+	# it too — otherwise the first Rattata you meet would fix that species'
+	# numbers for the rest of the run.
 	var parts := split_id(id)
 	if parts.is_empty():
 		return {}
+	var key := "%s@%d" % [id, _level_for(String(parts["role"]))]
+	if _cache.has(key):
+		return _cache[key]
 	var mon := PokeData.mon(String(parts["name"]))
 	if mon.is_empty():
 		return {}
 	var d := _build_def(mon, String(parts["role"]))
-	_cache[id] = d
+	_cache[key] = d
 	return d
 
 
 static func _build_def(mon: Dictionary, role: String) -> Dictionary:
-	var hp := PokeBalance.mob_hp(mon)
+	# The level the dungeon is currently fighting at. Definitions are rebuilt
+	# whenever it moves — see get_def — so an Act 1 Rattata and an Act 4 Rattata
+	# really are different animals.
+	var level := _level_for(role)
+	var hp := PokeBalance.mob_hp(mon, level)
 	var scaled := int(round(hp * PokeBalance.role_hp_multiplier(role)))
-	var moves := _moveset(mon, role)
+	var moves := _moveset(mon, role, level)
 	var d := {
 		"name": PokeData.display_name(String(mon["name"])),
 		# A small spread so two of the same species are not identical.
@@ -91,6 +104,7 @@ static func _build_def(mon: Dictionary, role: String) -> Dictionary:
 		"moves": moves,
 		"poke": String(mon["name"]),
 		"role": role,
+		"level": level,
 	}
 	if role == "boss":
 		d["boss"] = true
@@ -103,10 +117,9 @@ static func _build_def(mon: Dictionary, role: String) -> Dictionary:
 ## wild Pokemon of that species would actually know. Only moves this engine can
 ## express are eligible, and the set is forced to contain at least one attack so
 ## no encounter can stall.
-static func _moveset(mon: Dictionary, role: String) -> Dictionary:
+static func _moveset(mon: Dictionary, role: String, cap: int) -> Dictionary:
 	var want := int(MOVE_COUNT.get(role, 4))
 
-	var cap := int(MOVE_LEVEL_CAP.get(role, 22))
 	var attacks: Array = []
 	var others: Array = []
 	_collect(mon, true, cap, attacks, others)
@@ -240,9 +253,12 @@ static func decorate(a: Actor, id: String) -> void:
 	var mon := mon_for(id)
 	if mon.is_empty():
 		return
+	var d := get_def(id)
 	a.poke_name = String(mon["name"])
 	a.poke_stats = mon["stats"]
 	a.poke_types = mon["types"]
+	a.level = int(d.get("level", PokeLevels.START_LEVEL))
+	a.name = "%s Lv%d" % [String(d["name"]), a.level]
 
 
 # ════════════════════════════════════ AI ═════════════════════════════════════
