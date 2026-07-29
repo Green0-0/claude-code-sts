@@ -1,4 +1,4 @@
-[gd_scene load_steps=11 format=3]
+[gd_scene load_steps=12 format=3]
 
 [ext_resource type="Script" path="res://scripts/ui/Main.gd" id="1_main"]
 [ext_resource type="Script" path="res://scripts/ui/TitleScreen.gd" id="2_title"]
@@ -13,6 +13,7 @@
 [ext_resource type="Script" path="res://scripts/ui/PokemonSelect.gd" id="11_pokesel"]
 [ext_resource type="Script" path="res://scripts/ui/EvolutionScreen.gd" id="12_evo"]
 [ext_resource type="Script" path="res://scripts/ui/Backdrop.gd" id="13_backdrop"]
+[ext_resource type="Script" path="res://scripts/ui/CaptureScreen.gd" id="14_capture"]
 
 [node name="Main" type="Node"]
 script = ExtResource("1_main")
@@ -773,6 +774,14 @@ offset_bottom = 470.0
 grow_horizontal = 2
 theme_override_constants/separation = 8
 alignment = 1
+
+[node name="CaptureScreen" type="Control" parent="Screens"]
+visible = false
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+script = ExtResource("14_capture")
 
 [node name="GameOverScreen" type="Control" parent="Screens"]
 visible = false

@@ -59,6 +59,9 @@ var slot: int = 0
 
 ## Bookkeeping
 var attacked_this_combat: bool = false
+## Set when a ball took this one out of the fight rather than damage. Keeps a
+## capture from reading as a kill anywhere that looks at why an enemy left.
+var captured: bool = false
 
 
 static func make_player(pname: String, cur_hp: int, maximum_hp: int) -> Actor:

@@ -3,7 +3,11 @@ extends Control
 
 ## Visual representation of a single Card.
 
-signal pressed(view: CardView)
+## `at` on both of these is the *event's* position rather than the live cursor's.
+## They are the same thing when a hand is driving the mouse, and only the event
+## carries a position at all when something else is — a synthesized click test, a
+## replay, a controller mapped onto a pointer.
+signal pressed(view: CardView, at: Vector2)
 signal released(view: CardView, at: Vector2)
 signal hover_changed(view: CardView, inside: bool)
 
@@ -193,10 +197,10 @@ func _gui_input(event: InputEvent) -> void:
 		return
 	if event is InputEventMouseButton and event.button_index == MOUSE_BUTTON_LEFT:
 		if event.pressed:
-			pressed.emit(self)
+			pressed.emit(self, event.global_position)
 			accept_event()
 		else:
-			released.emit(self, get_global_mouse_position())
+			released.emit(self, event.global_position)
 			accept_event()
 
 

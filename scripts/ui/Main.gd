@@ -17,6 +17,7 @@ const OVERLAY_Z := 1000
 @onready var rest_screen: Control = $Screens/RestScreen
 @onready var event_screen: Control = $Screens/EventScreen
 @onready var evolution_screen: Control = $Screens/EvolutionScreen
+@onready var capture_screen: Control = $Screens/CaptureScreen
 @onready var gameover_screen: Control = $Screens/GameOverScreen
 @onready var gameover_title: Label = $Screens/GameOverScreen/TitleLabel
 @onready var gameover_stats: Label = $Screens/GameOverScreen/StatsLabel
@@ -33,7 +34,9 @@ var _pending_event_request: String = ""
 var _room_type: String = "monster"
 var _toast_timer: Timer = null
 var _pending_evolution: Array = []
-var _capturing: bool = false
+## The enemy the player has decided to throw a ball at, held while the capture
+## screen is up so the fight knows who came back and who did not.
+var _capture_actor: Actor = null
 
 
 func _ready() -> void:
@@ -50,15 +53,15 @@ func _ready() -> void:
 	title_screen.continue_requested.connect(_on_continue_run)
 	title_screen.pokemon_requested.connect(func(): pokemon_select.open())
 	pokemon_select.chosen.connect(_on_pokemon_picked)
-	pokemon_select.cancelled.connect(func():
-		if _capturing:
-			_on_capture_cancelled())
 	map_screen.node_chosen.connect(_on_map_node_chosen)
 	combat_screen.combat_over.connect(_on_combat_over)
 	combat_screen.choice_needed.connect(_on_combat_choice)
 	combat_screen.pile_view_requested.connect(_on_pile_view)
+	combat_screen.capture_requested.connect(_on_capture_requested)
+	capture_screen.finished.connect(_on_capture_finished)
 	reward_screen.card_reward_requested.connect(_on_card_reward)
 	reward_screen.finished.connect(_on_rewards_finished)
+	reward_screen.skipped.connect(_on_reward_skipped)
 	shop_screen.leave_requested.connect(_return_to_map)
 	shop_screen.removal_requested.connect(_on_shop_removal)
 	rest_screen.smith_requested.connect(_on_smith)
@@ -237,11 +240,11 @@ func _on_combat_over(victory: bool) -> void:
 		var brid := Run.random_relic("boss")
 		if brid != "":
 			rewards.append({"kind": "relic", "id": brid})
-		# Every boss hands over a ball, better each time.
+		# Every boss hands over a ball, better each time. It is claimed like any
+		# other reward now — or turned down for coin, which buys two cheaper ones.
 		if Run.is_pokemon_run():
-			var ball := PokeCapture.ball_for_boss(Run.bosses_slain)
-			Run.balls.append(ball)
-			rewards.append({"kind": "ball", "id": ball})
+			rewards.append({"kind": "ball",
+					"id": PokeBalls.ball_for_boss(Run.bosses_slain)})
 	if Run.rng.randf() < (0.4 if _room_type != "boss" else 1.0) and Run.has_potion_space():
 		rewards.append({"kind": "potion", "id": PotionLibrary.random_potion(Run.rng)})
 	_show(reward_screen)
@@ -284,13 +287,8 @@ func _offer_evolution() -> bool:
 	return true
 
 
-## The dex picker is used both to start a run and to aim a ball, so its choice
-## has to be routed by what it was opened for.
 func _on_pokemon_picked(id: String) -> void:
-	if _capturing:
-		_on_capture_target(id)
-	else:
-		title_screen.start_with(id)
+	title_screen.start_with(id)
 
 
 func _on_evolution_chosen(index: int) -> void:
@@ -310,78 +308,54 @@ func _on_evolution_chosen(index: int) -> void:
 	_return_to_map()
 
 
-## Every boss hands over a ball. Spending it is a whole beat of its own, so it
-## happens before the act advances rather than being buried in the reward list.
-func _offer_capture() -> bool:
-	if not Run.is_pokemon_run() or Run.balls.is_empty():
-		return false
-	if Run.party.size() >= Run.MAX_PARTY:
-		show_toast("Your party is full — the ball goes unused.")
-		Run.balls.pop_front()
-		return false
-	var candidates: Array = []
-	for name in Run.seen_species:
-		if not _already_in_party(String(name)):
-			candidates.append(name)
-	if candidates.is_empty():
-		return false
-	_capturing = true
-	pokemon_select.open_capture(candidates, String(Run.balls[0]))
-	return true
-
-
-func _already_in_party(species: String) -> bool:
-	for m in Run.party:
-		if (m as PartyMember).species_name() == species:
-			return true
-	return false
-
-
-func _on_capture_target(character_id: String) -> void:
-	_capturing = false
-	var ball := String(Run.balls.pop_front()) if not Run.balls.is_empty() else "poke"
-	var mon := PokeCharacters.mon_for(character_id)
-	if mon.is_empty():
-		_continue_after_boss()
+# ════════════════════════════════════ Capture ════════════════════════════════
+## Captures happen mid-fight now: the combat screen asks for one, the throwing
+## screen resolves it, and the fight picks up where it left off.
+##
+## The old flow — a ball handed out after each boss, thrown at a species picked
+## out of a catalogue — is gone. Balls are bought, thrown by hand, and aimed at
+## something that is actually standing in front of you and actively dodging.
+func _on_capture_requested(actor: Actor) -> void:
+	if actor == null or combat_screen.combat == null:
 		return
-	# The throw uses the same odds the picker showed.
-	var max_hp := PokeBalance.player_hp(mon, Run.player_level)
-	var weakened := int(round(max_hp * PokeCapture.CAPTURE_HP_FRACTION))
-	var chance := PokeCapture.catch_chance(mon, ball, weakened, max_hp)
-	var name := PokeData.display_name(String(mon["name"]))
-	if Run.rng.randf() < chance:
-		var level := PokeCapture.joining_level(Run.player_level)
-		if Run.add_to_party(String(mon["name"]), level):
-			show_toast("Gotcha! %s joined the party at level %d." % [name, level])
+	_capture_actor = actor
+	var context: Dictionary = combat_screen.combat.capture_context(actor)
+	context["rect"] = combat_screen.enemy_rect_for(actor)
+	# The combat screen stays up underneath for the length of the transition, so
+	# the zoom really is a zoom onto the thing you just clicked.
+	capture_screen.visible = true
+	capture_screen.z_index = OVERLAY_Z - 1
+	top_bar.potions_enabled = false
+	await capture_screen.open(context)
+	_show(capture_screen)
+	capture_screen.z_index = 0
+
+
+func _on_capture_finished(result: Dictionary) -> void:
+	var actor := _capture_actor
+	_capture_actor = null
+	result["actor"] = actor
+	if bool(result.get("caught", false)):
+		var species := String(result.get("species", ""))
+		var level := int(result.get("level", Run.player_level))
+		if Run.add_to_party(species, level):
+			show_toast("Gotcha! %s joined the party at level %d."
+					% [PokeData.display_name(species), level])
+			if bool(result.get("healed", false)):
+				var joined: PartyMember = Run.party[Run.party.size() - 1]
+				joined.hp = joined.max_hp
 		else:
-			show_toast("%s was caught, but the party is full." % name)
-	else:
-		show_toast("%s broke free! The ball is spent." % name)
-	_continue_after_boss()
-
-
-func _on_capture_cancelled() -> void:
-	# Declining keeps the ball for the next boss rather than wasting it.
-	_capturing = false
-	_continue_after_boss()
-
-
-func _continue_after_boss() -> void:
-	if Run.act >= Run.acts_in_run():
-		_game_over(true)
-		return
-	if Run.advance_act():
-		show_toast("Act %d." % Run.act)
-		_go_to_map()
-	else:
-		_game_over(true)
+			show_toast("%s was caught, but there is no room for it."
+					% PokeData.display_name(species))
+			result["caught"] = false
+	_show(combat_screen)
+	top_bar.potions_enabled = true
+	top_bar.refresh()
+	combat_screen.resume_after_capture(result)
+	Run.save_run()
 
 
 func _after_boss() -> void:
-	# Spend the ball first — a new team-mate should arrive before the next act
-	# starts, not after you have already walked into it.
-	if _offer_capture():
-		return
 	if Run.act >= Run.acts_in_run():
 		_game_over(true)
 		return
@@ -483,11 +457,28 @@ func _on_picker_cancelled() -> void:
 		"combat":
 			combat_screen.combat.cancel_choice()
 		"reward":
-			reward_screen.mark_claimed(_picker_row)
-			show_toast("You skip the card reward.")
+			# Closing the picker is a skip, and a skip pays.
+			var pinch: int = reward_screen.on_card_reward_declined(_picker_row)
+			if pinch > 0:
+				show_toast("You skip the card and pocket %d Gold." % pinch)
+			else:
+				show_toast("You skip the card reward.")
+			top_bar.refresh()
 		"event":
 			event_screen.show_result("You decide against it.")
 	_picker_purpose = ""
+
+
+## A reward turned down at the reward screen rather than in the picker.
+func _on_reward_skipped(kind: String, gold: int) -> void:
+	var what := "reward"
+	match kind:
+		"cards": what = "card"
+		"relic": what = "relic"
+		"potion": what = "potion"
+		"ball": what = "ball"
+	show_toast("You leave the %s behind. +%d Gold." % [what, gold])
+	top_bar.refresh()
 
 
 # ══════════════════════════════════ Events ═══════════════════════════════════

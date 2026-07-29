@@ -152,6 +152,113 @@ func _run() -> void:
 	await _test_escape_during_mandatory_choice(c)
 	await _test_picker_reopen(c)
 	await _test_event_prompt()
+	await _test_drag_onto_enemy()
+	await _test_drag_onto_nothing()
+	await _test_drag_onto_ally()
+
+
+## Drags a card onto an enemy and lets go of it there.
+##
+## The gesture used to draw a line and then do nothing at all: the dragged card
+## sits under the cursor for the whole drag, so the enemy underneath never received
+## a mouse-enter and the drop had no target to find. This is that bug's test.
+func _drag(from: Vector2, to: Vector2, steps: int = 6) -> void:
+	var down := InputEventMouseButton.new()
+	down.button_index = MOUSE_BUTTON_LEFT
+	down.pressed = true
+	down.position = from
+	down.global_position = from
+	Input.parse_input_event(down)
+	await get_tree().process_frame
+	for i in range(1, steps + 1):
+		var at: Vector2 = from.lerp(to, float(i) / float(steps))
+		var motion := InputEventMouseMotion.new()
+		motion.position = at
+		motion.global_position = at
+		motion.relative = (to - from) / float(steps)
+		Input.parse_input_event(motion)
+		await get_tree().process_frame
+	var up := InputEventMouseButton.new()
+	up.button_index = MOUSE_BUTTON_LEFT
+	up.pressed = false
+	up.position = to
+	up.global_position = to
+	Input.parse_input_event(up)
+	await get_tree().process_frame
+	await get_tree().process_frame
+
+
+## A fresh fight with a known deck, so a drag test is not at the mercy of whatever
+## the last one left behind.
+func _fresh_fight(cards: Array) -> Combat:
+	main._show(main.combat_screen)
+	main.combat_screen.begin(["jaw_worm"], "monster")
+	await get_tree().process_frame
+	var c: Combat = main.combat_screen.combat
+	c.hand.clear()
+	for id in cards:
+		c.hand.append(Card.create(String(id)))
+	c.energy = 9
+	main.combat_screen._refresh_all()
+	await get_tree().process_frame
+	await get_tree().process_frame
+	return c
+
+
+func _test_drag_onto_enemy() -> void:
+	print("[click] --- dragging a card onto an enemy")
+	Run.start_run("ironclad", 4242)
+	var c: Combat = await _fresh_fight(["strike"])
+	var cs = main.combat_screen
+	if cs.card_views.is_empty() or cs.enemy_views.is_empty():
+		failed += 1
+		print("[click] cannot continue: no hand or no enemies")
+		return
+	var view: CardView = cs.card_views[0]
+	var foe: EnemyView = cs.enemy_views[0]
+	var hp_before: int = foe.actor.hp
+	var energy_before: int = c.energy
+
+	await _drag(view.get_global_rect().get_center(), foe.get_global_rect().get_center())
+	_check("the card left the hand", c.hand.size(), 0)
+	_check("energy was spent", c.energy < energy_before, true)
+	_check("the enemy took the hit", foe.actor.hp < hp_before, true)
+	_check("nothing is left dragging", cs._drag_active, false)
+	_check("the targeting line is gone", cs.target_line.visible, false)
+
+
+func _test_drag_onto_nothing() -> void:
+	print("[click] --- dragging a targeted card onto open ground")
+	var c: Combat = await _fresh_fight(["strike"])
+	var cs = main.combat_screen
+	if cs.card_views.is_empty():
+		failed += 1
+		return
+	var view: CardView = cs.card_views[0]
+	var energy_before: int = c.energy
+	# Sideways along the hand row: no enemy, no panel, nothing.
+	var from: Vector2 = view.get_global_rect().get_center()
+	await _drag(from, Vector2(30.0, 60.0))
+	_check("the card stayed in hand", c.hand.size(), 1)
+	_check("no energy was spent", c.energy, energy_before)
+	_check("it is playable again", cs.card_views.size() > 0, true)
+
+
+## A card aimed at your own side is dropped on a team-mate — or, in a party of one,
+## on the big panel that stands for whoever is acting.
+func _test_drag_onto_ally() -> void:
+	print("[click] --- dragging a card onto your own side")
+	var c: Combat = await _fresh_fight(["defend"])
+	var cs = main.combat_screen
+	if cs.card_views.is_empty():
+		failed += 1
+		return
+	var view: CardView = cs.card_views[0]
+	var block_before: int = c.player.block
+	await _drag(view.get_global_rect().get_center(),
+			cs.player_panel.get_global_rect().get_center())
+	_check("the card was played", c.hand.size(), 0)
+	_check("block was gained", c.player.block > block_before, true)
 
 
 ## The prompt is modal, but the hand fans itself with z_index, and z_index beats

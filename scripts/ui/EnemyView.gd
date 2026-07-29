@@ -23,6 +23,11 @@ var actor: Actor = null
 var combat: Combat = null
 var index: int = 0
 var targeted: bool = false
+## Where the layout wants this view to sit. Recoils spring back to here rather
+## than to wherever the node happens to be, because two blows can land close
+## enough together for their tweens to overlap — and without a fixed home the
+## second one would knock the view permanently off its mark.
+var home_position: Vector2 = Vector2.ZERO
 
 ## The ATB gauge. Built in code rather than in the scene so the bar sits directly
 ## under whatever height the HP bar ends up at.
@@ -55,7 +60,7 @@ func setup(a: Actor, cmb: Combat, idx: int) -> void:
 
 ## Takes a hit: knocked back and blanched, harder for an execution than a hex.
 func recoil(hard: bool) -> void:
-	var origin := position
+	var origin := home_position if home_position != Vector2.ZERO else position
 	var shove := Vector2(0, 18.0) if hard else Vector2(0, 7.0)
 	var t := create_tween()
 	t.set_parallel(true)

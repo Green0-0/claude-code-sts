@@ -61,6 +61,8 @@ func _run() -> void:
 	_test_party()
 	_test_enemy_decks()
 	_test_capture()
+	_test_balls()
+	_test_resistance()
 	_test_combat()
 	_test_ailments()
 	_test_speed()
@@ -94,7 +96,10 @@ func _test_enemy_decks() -> void:
 		foe.draw_pile.append(c2)
 	foe.discard_pile.clear()
 	var before_draw := foe.draw_pile.size()
-	c._take_enemy_card_turn(foe)
+	# An enemy turn is staged now, so the UI can animate it card by card;
+	# _take_enemy_turn drives those stages straight through, which is what a
+	# headless run does.
+	c._take_enemy_turn(foe)
 	_check_true("it drew cards", foe.draw_pile.size() < before_draw)
 	_check_true("but only a capped number of plays",
 			foe.move_history.size() <= foe.cards_per_turn + 4)
@@ -110,7 +115,7 @@ func _test_enemy_decks() -> void:
 	var total := foe.draw_pile.size() + foe.discard_pile.size() \
 			+ foe.exhaust_pile.size() + foe.hand.size()
 	for i in range(6):
-		c._take_enemy_card_turn(foe)
+		c._take_enemy_turn(foe)
 	_check("no cards were lost or duplicated",
 			foe.draw_pile.size() + foe.discard_pile.size() + foe.exhaust_pile.size()
 					+ foe.hand.size(), total)
@@ -287,6 +292,251 @@ func _test_capture() -> void:
 	_check_true("catching it grows the party",
 			Run.add_to_party(String(Run.seen_species[0]), 10))
 	_check("the party grew by one", Run.party.size(), before + 1)
+
+
+# ══════════════════════════════ The ball catalogue ═══════════════════════════
+func _test_balls() -> void:
+	print("[poke] --- balls")
+	_check_true("there is a real catalogue", PokeBalls.ids().size() >= 20)
+	# Every ball is in a real category at a real rarity and has a price.
+	var bad := 0
+	for id in PokeBalls.ids():
+		var bid := String(id)
+		if not PokeBalls.CATEGORIES.has(PokeBalls.category_of(bid)):
+			bad += 1
+		if not PokeBalls.RARITIES.has(PokeBalls.rarity_of(bid)):
+			bad += 1
+		if PokeBalls.price_of(bid) <= 0:
+			bad += 1
+	_check("every ball is well formed", bad, 0)
+	_check_true("all four categories are stocked",
+			PokeBalls.CATEGORIES.all(func(cat):
+				return PokeBalls.ids().any(func(id): return PokeBalls.category_of(String(id)) == cat)))
+	_check_true("all four rarities are stocked",
+			PokeBalls.RARITIES.all(func(r): return not PokeBalls.pool_for(String(r)).is_empty()))
+	# Catalogue order groups categories, which is what stops a rack repeating a
+	# heading halfway down itself.
+	var seen: Array = []
+	var repeats := 0
+	var last := ""
+	for id in PokeBalls.ids_ordered():
+		var cat := PokeBalls.category_of(String(id))
+		if cat != last:
+			if seen.has(cat):
+				repeats += 1
+			seen.append(cat)
+			last = cat
+	_check("catalogue order never revisits a category", repeats, 0)
+
+	# Conditional balls are the point of the catalogue: the same ball is worth
+	# wildly different amounts against different targets.
+	var squirtle := _ball_ctx(PokeData.mon("squirtle"))
+	var charmander := _ball_ctx(PokeData.mon("charmander"))
+	_check_true("a net ball is huge against water",
+			PokeBalls.multiplier("net", squirtle) > 3.0)
+	_check("and ordinary against fire", PokeBalls.multiplier("net", charmander), 1.0)
+	_check_true("a beast ball is useless against a squirtle",
+			PokeBalls.multiplier("beast", squirtle) < 0.5)
+	var mewtwo_ctx := _ball_ctx(PokeData.mon("mewtwo"))
+	_check_true("and enormous against a legendary",
+			PokeBalls.multiplier("beast", mewtwo_ctx) >= 5.0)
+	_check_true("a moon ball reads the evolution line",
+			PokeBalls.multiplier("moon", squirtle) > PokeBalls.multiplier("moon", mewtwo_ctx))
+	_check_true("a fast ball reads base speed",
+			PokeBalls.multiplier("fast", _ball_ctx(PokeData.mon("electrode")))
+					> PokeBalls.multiplier("fast", _ball_ctx(PokeData.mon("shuckle"))))
+	_check_true("a heavy ball reads weight",
+			PokeBalls.multiplier("heavy", _ball_ctx(PokeData.mon("snorlax")))
+					> PokeBalls.multiplier("heavy", _ball_ctx(PokeData.mon("pikachu"))))
+	# A quick ball is worth five ultra balls on turn one and nothing later.
+	var early := _ball_ctx(PokeData.mon("rattata"))
+	early["turn"] = 1
+	var late := _ball_ctx(PokeData.mon("rattata"))
+	late["turn"] = 9
+	_check_true("a quick ball is for the opening",
+			PokeBalls.multiplier("quick", early) > 4.0
+					and PokeBalls.multiplier("quick", late) < 1.0)
+	_check_true("a timer ball is for the long haul",
+			PokeBalls.multiplier("timer", late) > PokeBalls.multiplier("timer", early))
+	# A dusk ball needs the target not to see it coming.
+	var asleep := _ball_ctx(PokeData.mon("rattata"))
+	asleep["statuses"] = {"sleep": 2}
+	_check_true("a dusk ball wants it blind",
+			PokeBalls.multiplier("dusk", asleep) > PokeBalls.multiplier("dusk", early))
+
+	# The shop stocks a spread, and drifts toward the good stuff as the run goes on.
+	var rng := RandomNumberGenerator.new()
+	rng.seed = 918
+	var shallow := PokeBalls.shop_stock(rng, 0.0, 5)
+	var deep := PokeBalls.shop_stock(rng, 1.0, 5)
+	_check("a shop stocks five kinds", shallow.size(), 5)
+	_check_true("with something in each entry",
+			shallow.all(func(e): return int(e["stock"]) >= 1 and int(e["price"]) > 0))
+	var shallow_value := 0
+	var deep_value := 0
+	for e in shallow:
+		shallow_value += PokeBalls.price_of(String(e["id"]))
+	for e in deep:
+		deep_value += PokeBalls.price_of(String(e["id"]))
+	print("[poke]      shelf value: act 1 %d, act 4 %d" % [shallow_value, deep_value])
+	_check_true("a late shelf is worth more than an early one", deep_value > shallow_value)
+
+	# The bag itself.
+	Run.start_run(PokeCharacters.character_id("pikachu"), 555)
+	_check("the bag starts empty", Run.total_balls(), 0)
+	Run.add_ball("great", 3)
+	Run.add_ball("net")
+	_check("balls stack", Run.ball_count("great"), 3)
+	_check("and the bag counts them all", Run.total_balls(), 4)
+	_check_true("spending one works", Run.spend_ball("great"))
+	_check("the stack shrank", Run.ball_count("great"), 2)
+	_check_true("spending one you have not got does not", not Run.spend_ball("master"))
+	_check("nothing was lost", Run.total_balls(), 3)
+	Run.add_ball("not_a_ball")
+	_check("junk ids are refused", Run.total_balls(), 3)
+
+	# Skipping a reward pays, and pays more the deeper the run.
+	_check_true("skipping a card pays", Run.skip_gold_for("cards") > 0)
+	_check("but gold cannot be skipped for gold", Run.skip_gold_for("gold"), 0)
+
+
+## A capture context for a species at full health, at parity, on turn one.
+func _ball_ctx(mon: Dictionary) -> Dictionary:
+	return PokeBalls.context_for(mon, 20, 20, {}, 20, 20, 1, false, [])
+
+
+# ═════════════════════════════ Resistance and motion ═════════════════════════
+func _test_resistance() -> void:
+	print("[poke] --- resistance and movement")
+	var rattata := PokeData.mon("rattata")
+	var mewtwo := PokeData.mon("mewtwo")
+
+	# Resistance is the mirror of the catch rate: everything that makes a catch
+	# likely makes resistance low.
+	var fresh := PokeCapture.resistance(rattata, 20, 20, {}, 20, 20)
+	var hurt := PokeCapture.resistance(rattata, 2, 20, {}, 20, 20)
+	var slept := PokeCapture.resistance(rattata, 20, 20, {"sleep": 2}, 20, 20)
+	_check_true("hurting it lowers resistance", hurt < fresh)
+	_check_true("so does putting it to sleep", slept < fresh)
+	_check_true("a legendary resists harder than a rattata",
+			PokeCapture.resistance(mewtwo, 20, 20, {}, 20, 20) > fresh)
+	_check_true("and something above your level harder still",
+			PokeCapture.resistance(rattata, 20, 20, {}, 60, 20) > fresh)
+	_check_true("resistance stays in range",
+			hurt >= 0.0 and PokeCapture.resistance(mewtwo, 100, 100, {}, 100, 5) <= 1.0)
+	print("[poke]      rattata: fresh %.2f, hurt %.2f, asleep %.2f"
+			% [fresh, hurt, slept])
+	# And it is the same ordering the catch odds use, which is the whole point.
+	_check_true("resistance tracks the odds inversely",
+			PokeCapture.catch_chance(rattata, "poke", 2, 20)
+					> PokeCapture.catch_chance(rattata, "poke", 20, 20))
+	# Patience: a furious legendary gives you fewer throws than a spent rattata.
+	_check_true("a fierce target gives you fewer throws",
+			PokeCapture.patience(1.0) < PokeCapture.patience(0.05))
+	_check_true("but always at least one", PokeCapture.patience(1.0, -9) >= 1)
+
+	# Accuracy tiers: nearer the middle is worth more, and they are ordered.
+	_check("dead centre is excellent",
+			String(PokeCapture.accuracy_tier(0.05)["name"]), "Excellent")
+	_check("the edge is nothing special",
+			String(PokeCapture.accuracy_tier(0.95)["name"]), "")
+	_check_true("and a better tier is worth more",
+			float(PokeCapture.accuracy_tier(0.05)["mult"])
+					> float(PokeCapture.accuracy_tier(0.6)["mult"]))
+	var ctx := _ball_ctx(rattata)
+	var centred := PokeCapture.throw_odds("poke", ctx, 0.05, true)
+	var careless := PokeCapture.throw_odds("poke", ctx, 0.95, false)
+	_check_true("a well-placed curve beats a careless lob",
+			float(centred["chance"]) > float(careless["chance"]))
+	_check_true("and the throw reports what it was worth",
+			String(centred["tier"]) == "Excellent" and bool(centred["curved"]))
+
+	# Shakes: the four-roll model, so a near miss rattles before it pops.
+	var rng := RandomNumberGenerator.new()
+	rng.seed = 4242
+	var caught := 0
+	var shake_total := 0
+	for i in range(400):
+		var roll := PokeCapture.shake_rolls(180.0, rng)
+		if bool(roll["caught"]):
+			caught += 1
+		shake_total += int(roll["shakes"])
+	_check_true("a good catch value usually holds", caught > 200)
+	_check_true("and a break-free still rattles first", shake_total > caught)
+	_check_true("255 is a certainty",
+			bool(PokeCapture.shake_rolls(255.0, rng)["caught"]))
+	_check_true("and 0 never holds",
+			not bool(PokeCapture.shake_rolls(0.0, rng)["caught"]))
+
+	# Movement: one algorithm per type, blended for dual types.
+	_check("every type has a movement profile",
+			PokeData.type_names().filter(func(t):
+				return not PokeMotion.PROFILES.has(String(t))).size(), 0)
+	var bug := PokeMotion.for_types(["bug"])
+	var flying := PokeMotion.for_types(["flying"])
+	_check_true("a bug jolts and leaps",
+			float(bug["jolt"]) > 0.5 and float(bug["hop"]) > 0.5)
+	_check_true("a flier swerves instead", float(flying["swerve"]) > 0.5
+			and float(flying["hop"]) < 0.1)
+	_check_true("a rock barely moves",
+			float(PokeMotion.for_types(["rock"])["speed"])
+					< float(PokeMotion.for_types(["electric"])["speed"]))
+	_check_true("a ghost teleports", float(PokeMotion.for_types(["ghost"])["blink"]) > 0.5)
+
+	# A dual type carries both readings, weighted toward the primary.
+	var beedrill := PokeMotion.for_types(["bug", "flying"])
+	_check_true("a bug/flier keeps the bug's leap",
+			float(beedrill["hop"]) > float(flying["hop"]))
+	_check_true("and picks up the flier's swerve",
+			float(beedrill["swerve"]) > float(bug["swerve"]))
+	_check_true("weighted toward the primary",
+			absf(float(beedrill["jolt"]) - float(bug["jolt"]))
+					< absf(float(beedrill["jolt"]) - float(flying["jolt"])))
+	_check_true("and it says so in words",
+			String(beedrill["note"]).contains("leap")
+					and String(beedrill["note"]).contains("swerve"))
+	_check_true("both dodge styles survive the blend",
+			String(beedrill["style"]) != String(beedrill.get("style_alt", "")))
+
+	# Sampling is bounded, finite, and quietens as the target tires.
+	var wide := 0.0
+	var narrow := 0.0
+	var bad := 0
+	for i in range(200):
+		var t := float(i) * 0.05
+		var a: Dictionary = PokeMotion.sample(beedrill, t, 7, 1.0)
+		var b: Dictionary = PokeMotion.sample(beedrill, t, 7, 0.08)
+		var oa: Vector2 = a["offset"]
+		var ob: Vector2 = b["offset"]
+		if not is_finite(oa.x) or not is_finite(oa.y) or oa.length() > 900.0:
+			bad += 1
+		if float(a["alpha"]) < 0.0 or float(a["alpha"]) > 1.0:
+			bad += 1
+		wide += oa.length()
+		narrow += ob.length()
+	_check("sampling never produces nonsense", bad, 0)
+	_check_true("a spent target moves less than a fresh one", narrow < wide * 0.75)
+	print("[poke]      mean travel: fresh %.0fpx, spent %.0fpx"
+			% [wide / 200.0, narrow / 200.0])
+	_check_true("sampling is deterministic",
+			PokeMotion.sample(beedrill, 3.25, 7, 0.6)["offset"]
+					== PokeMotion.sample(beedrill, 3.25, 7, 0.6)["offset"])
+	_check_true("and two of the same species are out of phase",
+			PokeMotion.sample(beedrill, 3.25, 7, 0.6)["offset"]
+					!= PokeMotion.sample(beedrill, 3.25, 91, 0.6)["offset"])
+
+	# Dodging is willingness, and willingness is resistance.
+	_check_true("a fresh target dodges more than a spent one",
+			PokeMotion.dodge_chance(beedrill, 1.0) > PokeMotion.dodge_chance(beedrill, 0.05))
+	var drng := RandomNumberGenerator.new()
+	drng.seed = 11
+	var strong: Dictionary = PokeMotion.dodge_plan(beedrill, drng, 1.0, 0)
+	var weak: Dictionary = PokeMotion.dodge_plan(beedrill, drng, 0.05, 0)
+	_check_true("and gets further out of the way when it can",
+			(strong["offset"] as Vector2).length() > (weak["offset"] as Vector2).length())
+	_check_true("a blend alternates its two styles",
+			String(PokeMotion.dodge_plan(beedrill, drng, 1.0, 0)["style"])
+					!= String(PokeMotion.dodge_plan(beedrill, drng, 1.0, 1)["style"]))
 
 
 # ═════════════════════════════════ Levelling ═════════════════════════════════

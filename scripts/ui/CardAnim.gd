@@ -37,14 +37,25 @@ const SETTLE_TIME := 0.34
 ## rather than a billboard falling on the target.
 const BLADE_SCALE := 0.52
 
-var _running: bool = false
+## How many flights are in the air right now. A count rather than a flag, because
+## cards no longer wait their turn: the player can throw a second one while the
+## first is still climbing, and each flight owns nothing but its own ghost.
+var _active: int = 0
 
 
 func is_running() -> bool:
-	return _running
+	return _active > 0
+
+
+func active_count() -> int:
+	return _active
 
 
 ## card may be null for an enemy move, in which case `label` is drawn instead.
+##
+## Callers may await this or ignore it. Ignoring it is the normal case: the impact
+## callback is what carries the rules, so nothing downstream needs the flight to
+## be over.
 func play(card: Card, combat, label: String, tint: Color, from_pos: Vector2,
 		target_rect: Rect2, kind: int, on_impact: Callable) -> void:
 	if not enabled:
@@ -52,15 +63,25 @@ func play(card: Card, combat, label: String, tint: Color, from_pos: Vector2,
 			on_impact.call()
 		finished.emit()
 		return
-	_running = true
+	_active += 1
 	var ghost := _make_ghost(card, combat, label, tint)
 	add_child(ghost)
 	ghost.position = from_pos
 	await _run(ghost, target_rect, kind, tint, on_impact)
 	if is_instance_valid(ghost):
 		ghost.queue_free()
-	_running = false
+	_active = max(0, _active - 1)
 	finished.emit()
+
+
+## Drops everything still in the air and forgets it was ever counted. Called when
+## a fight ends: a card mid-flight and its damage numbers must not hang over the
+## next encounter.
+func abort() -> void:
+	for child in get_children():
+		remove_child(child)
+		child.queue_free()
+	_active = 0
 
 
 func _run(ghost: Control, target_rect: Rect2, kind: int, tint: Color,

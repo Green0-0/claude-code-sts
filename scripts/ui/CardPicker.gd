@@ -81,7 +81,9 @@ func _setup(title: String, cards: Array, mode: String, count: int, combat,
 	move_to_front()
 
 
-func _on_card_pressed(view: CardView) -> void:
+## `at` is unused here — the picker is a grid of buttons, not a board you aim at —
+## but CardView reports where the press landed for the benefit of the hand.
+func _on_card_pressed(view: CardView, _at: Vector2 = Vector2.ZERO) -> void:
 	match _mode:
 		"view":
 			return

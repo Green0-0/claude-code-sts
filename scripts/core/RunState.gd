@@ -160,7 +160,8 @@ var last_encounter_role: String = "monster"
 ## you have seen — catching out of a catalogue you have never fought would make
 ## the choice arbitrary.
 var seen_species: Array = []
-## Balls in hand, awarded one per boss.
+## Balls in the bag, as a flat list of ids so duplicates are simply repeats.
+## Bosses still hand one over; the rest are bought (see PokeBalls).
 var balls: Array = []
 
 
@@ -365,6 +366,50 @@ func add_potion(id: String) -> bool:
 func remove_potion(slot: int) -> void:
 	if slot >= 0 and slot < potions.size():
 		potions[slot] = ""
+
+
+# ─────────────────────────────────── The bag ──────────────────────────────────
+## Balls are a consumable, bought in bulk and spent one throw at a time, so the
+## bag is a multiset rather than a set of slots. There is no cap: what limits it
+## is Gold.
+signal balls_changed
+
+
+func add_ball(id: String, count: int = 1) -> void:
+	if not PokeBalls.has(id) or count <= 0:
+		return
+	for i in range(count):
+		balls.append(id)
+	balls_changed.emit()
+
+
+## Takes one of a kind out of the bag. False when there was none to take.
+func spend_ball(id: String) -> bool:
+	var idx: int = balls.find(id)
+	if idx < 0:
+		return false
+	balls.remove_at(idx)
+	balls_changed.emit()
+	return true
+
+
+func ball_count(id: String) -> int:
+	return balls.count(id)
+
+
+func total_balls() -> int:
+	return balls.size()
+
+
+## id -> how many, in catalogue order, so the rack can group by category without
+## repeating a heading.
+func ball_counts() -> Dictionary:
+	var out := {}
+	for id in PokeBalls.ids_ordered():
+		var n := ball_count(String(id))
+		if n > 0:
+			out[String(id)] = n
+	return out
 
 
 # ────────────────────────────────────── Deck ──────────────────────────────────
@@ -717,7 +762,38 @@ func generate_shop() -> Dictionary:
 	for i in range(3):
 		var pid := PotionLibrary.random_potion(rng)
 		stock["potions"].append({"id": pid, "price": PotionLibrary.price(pid), "sold": false})
+	# A Pokemon run buys its balls here rather than being handed them. The shelf
+	# drifts toward the better categories as the run goes on, so a Beast Ball is
+	# something you find in Act 4 rather than something you save up for in Act 1.
+	if is_pokemon_run():
+		stock["balls"] = PokeBalls.shop_stock(rng, progress(), 5)
+	else:
+		stock["balls"] = []
 	return stock
+
+
+# ───────────────────────────── Skipping a reward ──────────────────────────────
+## What a merchant would give you for walking away from a reward.
+##
+## Turning down a card, a relic or a potion now pays a pinch of Gold instead of
+## nothing at all, which is what funds a bag of balls: the run's two ways of
+## spending a victory — take the thing, or take the money and buy a throw with it
+## — are meant to compete with each other.
+const SKIP_GOLD := {
+	"cards": [18, 30],
+	"relic": [45, 70],
+	"potion": [14, 24],
+	"ball": [20, 35],
+}
+
+
+func skip_gold_for(kind: String) -> int:
+	var band: Array = SKIP_GOLD.get(kind, [])
+	if band.is_empty():
+		return 0
+	# Scaled by how deep the run is, so a late skip is worth a late purchase.
+	var base := rng.randi_range(int(band[0]), int(band[1]))
+	return int(round(base * (1.0 + 0.6 * progress())))
 
 
 func _card_base_price(rarity: String) -> int:

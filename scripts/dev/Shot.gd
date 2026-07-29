@@ -56,3 +56,26 @@ func _run() -> void:
 	# A boss, which is where the legendaries live.
 	main.combat_screen.begin([PokeMobs.enemy_id("dragonite", "boss")], "boss")
 	await _shot("06_boss")
+
+	# The shop's ball rack.
+	main._show(main.shop_screen)
+	main.shop_screen.open_shop(Run.generate_shop())
+	await _shot("07_shop_balls")
+
+	# The throwing screen, mid-flight. A bag first, then a target, then a throw.
+	Run.add_ball("great", 3)
+	Run.add_ball("net", 2)
+	Run.add_ball("dusk", 1)
+	main._show(main.combat_screen)
+	main.combat_screen.begin([PokeMobs.enemy_id("wingull"),
+			PokeMobs.enemy_id("gastly")], "monster")
+	await get_tree().process_frame
+	var quarry: Array = main.combat_screen.combat.capture_targets()
+	if not quarry.is_empty():
+		await main._on_capture_requested(quarry[0])
+		await _shot("08_capture")
+		main.capture_screen.throw_at_center(0.6, 0.15)
+		# Part-way to the target plane, so the ball is caught in the air.
+		for i in range(9):
+			await get_tree().process_frame
+		await _shot("09_capture_throw")

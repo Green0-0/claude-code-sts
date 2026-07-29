@@ -597,36 +597,107 @@ func _end_of_turn_for(a: Actor) -> void:
 			a.hp = 0
 
 
-## One enemy's whole turn: upkeep, its action, then end-of-turn. Under ATB an
-## enemy's turn is self-contained — nothing else is happening around it.
+## One enemy's whole turn, resolved immediately. Used by the headless harnesses
+## and by anything that does not care about the picture; the animated path drives
+## the three staged calls below instead.
 func _take_enemy_turn(e: Actor) -> void:
+	if not bool(enemy_turn_begin(e).get("ok", false)):
+		enemy_turn_end()
+		return
+	while true:
+		var token := enemy_turn_next()
+		if token.is_empty():
+			break
+		resolve_commit(token)
+		if finished or e.is_dead():
+			break
+	enemy_turn_end()
+
+
+# ─────────────────────────── The enemy turn, staged ──────────────────────────
+## An enemy's turn is exposed in three pieces so the UI can animate it the same
+## way it animates the player's: begin the turn, pull one committed action at a
+## time, then close the turn out once the last one has landed.
+##
+## It used to be a single call, which meant a Pokemon spending three cards got
+## one generic flourish for all three. Staging it means an enemy's hand is played
+## by exactly the player's rules and read exactly the player's way: each card
+## leaves its hand, flies, and lands on the target its AI picked for it.
+var _turn_actor: Actor = null
+var _turn_played: int = 0
+var _turn_scripted: bool = false
+
+
+## Upkeep, energy and the draw. Returns {ok, reason}: ok false with a reason means
+## the enemy is standing there asleep, and false with none means it is gone.
+func enemy_turn_begin(e: Actor) -> Dictionary:
+	_turn_actor = e
+	_turn_played = 0
+	_turn_scripted = false
+	if e == null:
+		return {"ok": false, "reason": ""}
 	# An enemy's Block expires at the start of its own turn.
 	e.block = 0
 	_tick_poison(e)
 	_tick_poke_ailments(e)
 	_check_deaths()
 	if e.is_dead() or _check_end():
-		return
+		_turn_actor = null
+		return {"ok": false, "reason": ""}
 
 	var stopped := incapacitated_reason(e)
 	if stopped != "":
 		_say(stopped)
-	elif e.draw_pile.size() + e.hand.size() + e.discard_pile.size() > 0:
-		_take_enemy_card_turn(e)
+		return {"ok": false, "reason": stopped}
+
+	if e.draw_pile.size() + e.hand.size() + e.discard_pile.size() > 0:
+		# A Pokemon plays cards on the player's terms: refill energy, draw back up
+		# to a hand, then spend that energy until nothing affordable is left.
+		e.energy = e.energy_per_turn
+		_enemy_draw(e, max(0, e.base_draw - e.hand.size()))
 	else:
 		# The Spire's own cast has no deck; they resolve one scripted move.
-		var move_name: String = String(e.intent.get("name", ""))
-		if move_name == "":
-			_pick_intent(e)
-			move_name = String(e.intent.get("name", ""))
-		var moves := EnemyLibrary.moves_of(e.enemy_id)
-		var move: Dictionary = moves.get(move_name, {"effects": []})
-		_say("%s uses %s." % [e.name, move_name])
-		e.move_history.append(move_name)
-		var ctx := {"owner": e, "target": player, "params": {}, "source_card": null}
-		_push_effects(move.get("effects", []), ctx)
-		_run_queue()
+		_turn_scripted = true
+	changed.emit()
+	return {"ok": true, "reason": ""}
 
+
+## The next action this enemy commits to, or {} when its turn is out of actions.
+## Committed exactly like a played card: paid for and out of the hand, waiting
+## only to be landed by `resolve_commit`.
+func enemy_turn_next() -> Dictionary:
+	var e := _turn_actor
+	if e == null or finished or e.is_dead() or not e.alive:
+		return {}
+	if _turn_scripted:
+		if _turn_played > 0:
+			return {}
+		_turn_played += 1
+		return _commit_enemy_move(e)
+	if _turn_played >= e.cards_per_turn:
+		return {}
+	var card := _enemy_best_card(e)
+	if card == null:
+		return {}
+	_turn_played += 1
+	return _commit_enemy_card(e, card)
+
+
+## Closes the turn out: leftovers discarded, end-of-turn upkeep, next intent.
+func enemy_turn_end() -> void:
+	var e := _turn_actor
+	_turn_actor = null
+	_turn_played = 0
+	_turn_scripted = false
+	if e == null:
+		return
+	# Whatever is left in hand is discarded, exactly as the player's is.
+	var leftovers: Array = e.hand.duplicate()
+	for c in leftovers:
+		e.hand.erase(c)
+		e.discard_pile.append(c)
+	if e.is_dead():
+		return
 	_end_of_turn_for(e)
 	_decay_statuses(e)
 	e.turn_count += 1
@@ -635,28 +706,25 @@ func _take_enemy_turn(e: Actor) -> void:
 		_pick_intent(e)
 
 
-## An enemy Pokemon's turn, played by the same rules the player uses: refill
-## energy, draw back up to a hand, then spend that energy on cards until nothing
-## affordable is left.
-func _take_enemy_card_turn(e: Actor) -> void:
-	e.energy = e.energy_per_turn
-	_enemy_draw(e, max(0, e.base_draw - e.hand.size()))
+## Whether the enemy currently mid-turn has anything left to do. The UI reads it
+## to decide whether to keep pumping.
+func enemy_turn_active() -> bool:
+	return _turn_actor != null
 
-	var played := 0
-	while played < e.cards_per_turn:
-		var card := _enemy_best_card(e)
-		if card == null:
-			break
-		_enemy_play_card(e, card)
-		played += 1
-		if finished or e.is_dead():
-			return
 
-	# Whatever is left is discarded, exactly as the player's hand is.
-	var leftovers: Array = e.hand.duplicate()
-	for c in leftovers:
-		e.hand.erase(c)
-		e.discard_pile.append(c)
+## Hands the clock back once the UI has finished playing an enemy's turn out.
+##
+## `step_enemy` does this itself when it resolves a turn in one go; an animated
+## turn is driven from outside, so the gauge has to be emptied from outside too.
+func finish_enemy_turn(e: Actor) -> bool:
+	if finished:
+		return false
+	_check_deaths()
+	_spend_charge(e)
+	if _check_end():
+		return false
+	changed.emit()
+	return true
 
 
 ## The best card in an enemy's hand it can currently afford, or null.
@@ -701,21 +769,124 @@ func _enemy_card_score(e: Actor, card: Card) -> float:
 	return score * (1.0 + rng.randf() * 0.25)
 
 
-func _enemy_play_card(e: Actor, card: Card) -> void:
+## Pays for one of an enemy's cards and takes it out of its hand. The mirror of
+## `commit_card`, down to the token it hands back.
+func _commit_enemy_card(e: Actor, card: Card) -> Dictionary:
 	e.hand.erase(card)
 	e.energy = max(0, e.energy - max(0, card.base_cost()))
 	e.move_history.append(card.display_name())
+	var victim := _enemy_choose_target(e, card)
 	_say("%s plays %s." % [e.name, card.display_name()])
 	card_flew.emit(card, "hand", "play")
-	var ctx := {"owner": e, "target": player, "params": card.raw_params(),
-			"source_card": card}
-	_push_effects(card.effects(), ctx)
-	_run_queue()
-	# One-shot moves burn out; everything else cycles.
-	if card.has_flag("exhaust"):
-		e.exhaust_pile.append(card)
-	else:
-		e.discard_pile.append(card)
+	var ctx := {"owner": e, "target": victim, "victim": victim,
+			"params": card.raw_params(), "source_card": card,
+			"ally_target": _enemy_choose_ally(e)}
+	# A one-shot burns out and a Power is spent for good, exactly as the player's
+	# are. An enemy's spent cards go to its exhaust pile rather than nowhere, so a
+	# spent Power is still countable — the effect is the same, since nothing draws
+	# out of an exhaust pile.
+	var dest := "discard"
+	if card.type() == "power" or card.has_flag("exhaust"):
+		dest = "exhaust"
+	changed.emit()
+	return {"kind": "card", "card": card, "owner": e, "target": victim, "ctx": ctx,
+			"effects": card.effects(), "repeats": 1, "dest": dest,
+			"unplayable": false, "name": card.display_name(),
+			"intent": _card_intent(card), "resolved": false}
+
+
+## The scripted single move of an enemy with no deck.
+func _commit_enemy_move(e: Actor) -> Dictionary:
+	var move_name: String = String(e.intent.get("name", ""))
+	if move_name == "":
+		_pick_intent(e)
+		move_name = String(e.intent.get("name", ""))
+	var moves := EnemyLibrary.moves_of(e.enemy_id)
+	var move: Dictionary = moves.get(move_name, {"effects": []})
+	var victim := _enemy_choose_target(e, null)
+	_say("%s uses %s." % [e.name, move_name])
+	e.move_history.append(move_name)
+	var ctx := {"owner": e, "target": victim, "victim": victim, "params": {},
+			"source_card": null, "ally_target": _enemy_choose_ally(e)}
+	return {"kind": "move", "card": null, "owner": e, "target": victim, "ctx": ctx,
+			"effects": move.get("effects", []), "repeats": 1, "dest": "",
+			"unplayable": false, "name": move_name,
+			"intent": String(move.get("intent", "unknown")), "resolved": false}
+
+
+## Which intent glyph a card counts as, so an enemy's card gets the same read as
+## its scripted move would.
+func _card_intent(card: Card) -> String:
+	if card == null:
+		return "unknown"
+	if card.type() == "attack":
+		return "attack"
+	if card.effective_target_kind() in ["self", "none", "ally"]:
+		return "buff"
+	return "debuff"
+
+
+## Which member of the party an enemy comes for.
+##
+## The player picks a target for every card it throws; an enemy should have to as
+## well. It weighs the type matchup of the move it is actually holding, how close
+## each member is to falling, and leans toward whoever is acting — but not so hard
+## that the back of the party is safe, which is what would make a party a shield
+## rather than a team.
+func _enemy_choose_target(e: Actor, card: Card) -> Actor:
+	var live := living_party()
+	if live.is_empty():
+		return player
+	if live.size() == 1:
+		return live[0]
+
+	# The type of the blow being thrown, if it is a blow at all.
+	var move_type := ""
+	if card != null and card.is_pokemon_card():
+		move_type = String((card.def().get("poke", {}) as Dictionary).get("type", ""))
+	elif card == null and not e.intent.is_empty():
+		for eff in e.intent.get("effects", []):
+			if String(eff.get("op", "")) == "poke_damage":
+				move_type = String(eff.get("mtype", ""))
+				break
+
+	var best: Actor = live[0]
+	var best_score := -INF
+	for m in live:
+		var member: Actor = m
+		var eff_mult := 1.0
+		if move_type != "" and move_type != PokeMoves.TYPELESS and member.is_pokemon():
+			eff_mult = PokeData.effectiveness(move_type, member.poke_types)
+		var score := 0.0
+		if eff_mult <= 0.0:
+			# Immune: never the pick unless there is nobody else at all.
+			score = -5.0
+		else:
+			score = 10.0 * eff_mult
+			# Finish what is nearly finished.
+			score += (1.0 - member.hp_ratio()) * 14.0
+			# Whoever is holding the cards is the obvious threat.
+			if member == player:
+				score += 6.0
+			score *= 1.0 + rng.randf() * 0.3
+		if score > best_score:
+			best_score = score
+			best = member
+	return best
+
+
+## Which of its own side an enemy would point a supporting move at: the worst-off
+## of its allies, or itself if it is the worst off.
+func _enemy_choose_ally(e: Actor) -> Actor:
+	var best: Actor = e
+	var worst := e.hp_ratio()
+	for other in living_enemies():
+		if other == e:
+			continue
+		if other.hp_ratio() < worst:
+			worst = other.hp_ratio()
+			best = other
+	return best
 
 
 func _enemy_draw(e: Actor, count: int) -> void:
@@ -800,16 +971,37 @@ func can_play(c: Card, target_index: int = -1) -> Dictionary:
 	return {"ok": true, "why": ""}
 
 
+## Playing a card happens in two steps rather than one.
+##
+## `commit_card` takes the card out of the hand and pays for it *now*; nothing it
+## does can be seen. `resolve_commit` lands the effects, and the UI calls it on
+## the frame the card's animation actually connects. That split is what lets a
+## second card be thrown while the first is still in the air — the energy is
+## already spent and the hand is already correct, so there is nothing to wait for
+## — while still keeping the damage numbers on the same frame as the blow.
+##
+## `play_card` does both at once, which is what the headless harnesses and the
+## click tests use: with animation off there is no picture to stay in time with.
 func play_card(c: Card, target_index: int = -1) -> bool:
+	var token := commit_card(c, target_index)
+	if token.is_empty():
+		return false
+	resolve_commit(token)
+	return true
+
+
+## Pays for a card and takes it out of the hand, returning the token that
+## `resolve_commit` will later land. Returns {} if the card cannot be played.
+func commit_card(c: Card, target_index: int = -1) -> Dictionary:
 	var check := can_play(c, target_index)
 	if not check["ok"]:
 		_say(String(check["why"]))
-		return false
+		return {}
 
 	var target: Actor = null
 	var living := living_enemies()
 	if living.is_empty():
-		return false
+		return {}
 	if c.needs_target():
 		target = living[clampi(target_index, 0, living.size() - 1)]
 	else:
@@ -833,14 +1025,9 @@ func play_card(c: Card, target_index: int = -1) -> bool:
 		turn_attack_counter += 1
 	_say("You play %s." % c.display_name())
 
-	# Curses played through Blue Candle just hurt and vanish.
-	if c.is_unplayable():
-		_lose_hp(player, 1, "Blue Candle")
-		_move_card(c, "none", "exhaust")
-		_on_exhaust(c)
-		_after_card_played(c, target)
-		return true
-
+	# Everything that depends on the state of the board is read here, at the
+	# moment of play, not when the card lands: Body Slam is worth the Block you
+	# had when you threw it.
 	var params := _params_for_play(c)
 	var ctx := {"owner": player, "target": target, "params": params,
 			"source_card": c, "x": x_value, "ally_target": ally_target}
@@ -853,9 +1040,6 @@ func play_card(c: Card, target_index: int = -1) -> bool:
 		ctx["double_damage"] = true
 		_say("Pen Nib doubles the blow!")
 
-	for i in range(repeats):
-		_push_effects(c.effects(), ctx.duplicate())
-
 	# Where the card goes once it has resolved.
 	var dest := "discard"
 	if c.type() == "power":
@@ -865,10 +1049,79 @@ func play_card(c: Card, target_index: int = -1) -> bool:
 	if c.type() == "skill" and player.has_status("corruption"):
 		dest = "exhaust"
 	ctx["dest"] = dest
-	_queue.append({"op": "_finish_card", "card": c, "dest": dest, "ctx": ctx})
+
+	changed.emit()
+	return {"kind": "card", "card": c, "owner": player, "target": target,
+			"ctx": ctx, "effects": c.effects(), "repeats": repeats, "dest": dest,
+			"unplayable": c.is_unplayable(), "name": c.display_name(),
+			"resolved": false}
+
+
+## Lands a committed card or enemy move. Safe to call once per token and no more;
+## a second call is a no-op, so a UI that both animates and cleans up cannot
+## resolve the same card twice.
+func resolve_commit(token: Dictionary) -> void:
+	if token.is_empty() or bool(token.get("resolved", false)):
+		return
+	token["resolved"] = true
+	var owner: Actor = token.get("owner", null)
+	var c: Card = token.get("card", null)
+	var target: Actor = token.get("target", null)
+	var ctx: Dictionary = token.get("ctx", {})
+	var by_player := owner != null and owner.is_player
+
+	if finished:
+		# The fight ended while this was in the air. Put the card back where it
+		# belongs so the next combat starts from a clean deck, and drop the rest.
+		_stow_committed(token)
+		return
+
+	# Curses played through Blue Candle just hurt and vanish.
+	if bool(token.get("unplayable", false)):
+		_lose_hp(owner, 1, "Blue Candle")
+		_move_card(c, "none", "exhaust")
+		_on_exhaust(c)
+		_after_card_played(c, target)
+		return
+
+	# A target that died while the card was still travelling hands the blow to
+	# whatever is left standing rather than dropping it on the floor.
+	if target != null and (not target.alive or target.is_dead()):
+		var live: Array = living_party() if target.is_player else living_enemies()
+		if live.is_empty():
+			_stow_committed(token)
+			return
+		target = live[0]
+		ctx["target"] = target
+		if not by_player:
+			ctx["victim"] = target
+
+	var repeats: int = max(1, int(token.get("repeats", 1)))
+	for i in range(repeats):
+		_push_effects(token.get("effects", []), ctx.duplicate())
+	if c != null:
+		if by_player:
+			_queue.append({"op": "_finish_card", "card": c,
+					"dest": String(token.get("dest", "discard")), "ctx": ctx})
+		else:
+			_queue.append({"op": "_finish_enemy_card", "card": c, "owner": owner,
+					"dest": String(token.get("dest", "discard")), "ctx": ctx})
 	_run_queue()
-	_after_card_played(c, target)
-	return true
+	if by_player and c != null:
+		_after_card_played(c, target)
+
+
+## Files a card away without resolving it, for a card whose fight ended under it.
+func _stow_committed(token: Dictionary) -> void:
+	var c: Card = token.get("card", null)
+	if c == null:
+		return
+	var owner: Actor = token.get("owner", null)
+	c.free_this_turn = false
+	if owner != null and not owner.is_player:
+		owner.discard_pile.append(c)
+	else:
+		discard_pile.append(c)
 
 
 func _params_for_play(c: Card) -> Dictionary:
@@ -969,6 +1222,9 @@ func _run_queue() -> void:
 		if item.has("op") and String(item["op"]) == "_finish_card":
 			_finish_card(item["card"], String(item["dest"]))
 			continue
+		if item.has("op") and String(item["op"]) == "_finish_enemy_card":
+			_finish_enemy_card(item["card"], item["owner"], String(item["dest"]))
+			continue
 		_apply_effect(item["eff"], item["ctx"])
 		_check_deaths()
 	_resolving = false
@@ -989,6 +1245,18 @@ func _finish_card(c: Card, dest: String) -> void:
 			_on_exhaust(c)
 		_:
 			card_flew.emit(c, "play", "gone")
+
+
+## An enemy's card cycling back into its own piles. One-shot moves burn out;
+## everything else comes round again, exactly as the player's does.
+func _finish_enemy_card(c: Card, owner: Actor, dest: String) -> void:
+	if c == null or owner == null:
+		return
+	c.free_this_turn = false
+	if dest == "exhaust":
+		owner.exhaust_pile.append(c)
+	else:
+		owner.discard_pile.append(c)
 
 
 func _resolve_amount(eff: Dictionary, key: String, ctx: Dictionary) -> int:
@@ -1015,11 +1283,22 @@ func _targets_for(eff: Dictionary, ctx: Dictionary) -> Array:
 	if src != null and mode in ["default", "enemy"] and src.effective_target_kind() == "all":
 		mode = "all"
 	if owner != null and not owner.is_player:
-		# Enemy effects target the player unless they say otherwise.
+		# An enemy's effects land on whoever its AI picked when it committed the
+		# move, unless the effect names someone else.
+		var victim = ctx.get("victim", ctx.get("target", player))
+		if victim == null or not (victim as Actor).is_player \
+				or not (victim as Actor).alive or (victim as Actor).is_dead():
+			var mine := living_party()
+			victim = mine[0] if not mine.is_empty() else player
 		match mode:
 			"self": return [owner]
-			"all", "player", "default": return [player]
-		return [player]
+			"ally":
+				var mate = ctx.get("ally_target", null)
+				if mate != null and (mate as Actor).alive and not (mate as Actor).is_dead():
+					return [mate]
+				return [owner]
+			"party": return living_party()
+		return [victim]
 	match mode:
 		"self": return [player]
 		"all": return living_enemies()
@@ -2425,6 +2704,72 @@ func use_potion(slot: int, target_index: int = -1) -> bool:
 	if Run.has_relic("toy_ornithopter"):
 		_heal(player, 3)
 	return true
+
+
+# ══════════════════════════════════ Captures ═════════════════════════════════
+## Throwing a ball is a move you can always reach for, on any turn, at anything
+## still standing — which is the whole change to how capture works. It is not a
+## reward handed out after a boss; it is a thing you choose to spend a turn on
+## while the fight is still going, with a bag you paid for in a shop.
+
+## Whether the player may put the cards down and throw right now.
+func can_capture() -> bool:
+	if finished or phase != "player" or not pending_choice.is_empty():
+		return false
+	if not Run.is_pokemon_run():
+		return false
+	return not capture_targets().is_empty()
+
+
+## Enemies a ball could be thrown at: anything still standing that is a Pokemon
+## and is not somebody's summoned minion.
+func capture_targets() -> Array:
+	var out: Array = []
+	for e in living_enemies():
+		if e.is_pokemon() and not e.is_minion:
+			out.append(e)
+	return out
+
+
+## Everything the capture screen needs to know about one target, gathered here so
+## the odds shown on the throwing screen are the same numbers this engine holds.
+func capture_context(e: Actor) -> Dictionary:
+	var mon := PokeData.mon(e.poke_name)
+	var statuses: Dictionary = {}
+	for key in e.statuses:
+		if not String(key).begins_with("stage_"):
+			statuses[String(key)] = e.statuses[key]
+	var party_level: int = player.level if player != null else PokeLevels.START_LEVEL
+	var ctx := PokeBalls.context_for(mon, e.hp, e.max_hp, statuses, e.level,
+			party_level, turn, e.attacked_this_combat, Run.party)
+	ctx["actor"] = e
+	ctx["name"] = e.name
+	ctx["resistance"] = PokeCapture.resistance(mon, e.hp, e.max_hp, statuses,
+			e.level, party_level)
+	return ctx
+
+
+## Takes a caught enemy out of the fight.
+##
+## Deliberately not a death: nothing drops, no experience is banked and nothing
+## that triggers on a kill fires. What you get instead is the Pokemon.
+func capture_enemy(e: Actor) -> void:
+	if e == null or not e.alive:
+		return
+	e.alive = false
+	e.captured = true
+	_say("[color=#8fd6a0]%s was caught![/color]" % e.name)
+	enemy_died.emit(e)
+	changed.emit()
+	_check_end()
+
+
+## Reaching for a ball costs the turn, caught or not. That is what keeps Capture
+## from being a free look every round — you are giving up an action to try it.
+func spend_turn_on_capture() -> void:
+	if finished or phase != "player":
+		return
+	end_turn()
 
 
 # ══════════════════════════════════ Helpers ══════════════════════════════════

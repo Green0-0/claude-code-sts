@@ -27,11 +27,11 @@ The main scene is `scenes/Main.tscn`.
 
 ```bash
 godot --headless -- --rules-test   # 69 assertions on the combat maths
-godot --headless -- --poke-test    # 324 assertions on the Pokémon layer
+godot --headless -- --poke-test    # 386 assertions on the Pokémon layer
 godot --headless -- --smoke        # one self-played run, prints a report
 godot --headless -- --smoke-deep   # 8 runs, immortal player, full 3-act coverage
 godot --headless -- --smoke-poke   # 8 self-played Pokémon runs
-godot -- --click-test              # 34 assertions driven by synthesized clicks
+godot -- --click-test              # 44 assertions driven by synthesized clicks
 godot --headless -- --shots        # save one PNG per screen to user://shots
 ```
 
@@ -82,15 +82,19 @@ machine, in ways that look like real bugs:
 
 | Input | Action |
 |---|---|
-| Drag a card upward past the hand | Play it (drop it on an enemy for targeted cards) |
+| Drag a card onto an enemy | Play it at that enemy |
+| Drag a card onto a party panel | Play it at that team-mate |
+| Drag a card upward past the hand | Play it at the default target |
 | Click a card, then click an enemy | Play a targeted card |
 | Click a card (untargeted) | Play it |
 | `1`–`9` | Select / play the Nth card in hand |
+| `C` | Engage Capture, then click the target |
 | `E` or `Space` | End turn |
 | Hover an enemy | Card damage numbers update for that target |
 | Click Draw / Discard / Exhaust | Inspect that pile |
 | Click a potion (top bar) | Drink it — right-click discards it |
-| `Esc` | Close the card picker |
+| Hold, drag and flick the ball | Throw it — curve the drag to swerve it |
+| `Esc` | Close the card picker, or cancel Capture |
 
 ---
 
@@ -440,21 +444,143 @@ clutter. Only the acting member's cards are interactive — the rest are scenery
 can read but not misclick. When the ATB hands control over, the layers *re-sort*
 rather than rebuild, so the swap is a movement.
 
-#### Pokéballs
+### Capture
 
-Every boss hands over one ball, better each time — **Poké, Great, Ultra, Master**.
-You throw it at any species you have actually met, and the odds are the games'
-own formula against the imported capture rates:
+Capture is a **move you make in the middle of a fight**, not a prize handed out
+after one. Any turn, against anything still standing, the Capture button puts the
+cards down and takes you to the throwing screen. The throw costs you the turn —
+win or lose — which is what makes reaching for a ball a decision instead of a free
+look every round.
+
+#### The bag is bought, not given
+
+Bosses still hand over one ball each (Poké, Great, Ultra, Master). Everything else
+is **bought from merchants**, out of a catalogue of 26 balls across four categories
+and four rarities:
+
+| Category | What they are |
+|---|---|
+| **Standard** | Poké, Great, Ultra, Master. Work on anything, cost accordingly. |
+| **Specialist** | Net, Dive, Dusk, Quick, Timer, Nest, Repeat, Heal, Premier. Cheap, and enormous against the right target. |
+| **Apricorn** | Fast, Level, Lure, Heavy, Love, Moon, Friend. Each reads one number straight off the dex page. |
+| **Exotic** | Dream, Sport, Safari, Beast, Luxury, Cherish. Rare, strange, occasionally decisive. |
+
+Most of them are **conditional**, and that is the point: a Net Ball is worth 3.5×
+against a Water type and exactly 1× against a Fire one, a Fast Ball wants base
+Speed 100+, a Heavy Ball wants 300 kg, a Moon Ball wants something that can still
+evolve, a Quick Ball is worth five Ultra Balls on the opening turn and less than
+a Poké Ball after it, and a Beast Ball is 5× on a legendary and 0.1× on anything
+else. Stocking the bag is a bet on what you expect to meet. `PokeBalls.multiplier`
+is the only place that judgement lives, and both the shop row and the throwing
+screen read the live number off it, so what you are shown and what you roll cannot
+drift apart.
+
+The shelf drifts toward the better categories as the run goes on, so an Act 4
+merchant is where a Beast Ball turns up rather than a fifth rack of Poké Balls.
+
+#### Funding it: skipping rewards pays
+
+Every reward you *could* take can be **turned down for a pinch of Gold** instead —
+the card choice, the relic, the potion, even the boss's ball. Closing the card
+picker counts as a skip and pays like one. The amounts scale with how deep the run
+is, and they are deliberately enough to matter: a run that keeps skipping cards is
+a run that **catches** its team rather than drafting it, and the two ways of
+spending a victory are meant to compete.
+
+#### The throw
+
+The capture screen is a Pokémon Go throw, built out of the same vector drawing the
+rest of the game uses — the ball is two half-discs, a band and a button.
+
+* **Hold, drag, release.** The launch velocity comes off the last eighth of a
+  second of the gesture, so a slow drag ending in a flick reads as a flick.
+* **Swerve.** Spin is the accumulated *curvature* of the drag path — the signed
+  area swept by consecutive segments. A straight flick has none; a hooked one
+  curves in flight, and a curved throw is worth 1.35×. Swerving is something the
+  hand does, not a button.
+* **Depth.** The ball travels away from the camera as well as up, shrinking as it
+  goes, with gravity easing off with distance so a good throw does not nose-dive.
+* **Where it lands matters.** Three rings mark the scoring bands, drawn at exactly
+  the ratios the maths uses: **Excellent** 1.85×, **Great** 1.45×, **Nice** 1.18×.
+  Outside the outer ring is a miss and the ball is gone. A well-placed Great Ball
+  beats a careless Ultra.
+
+The ring rides *with* the target and scales with it, because it is that Pokémon's
+sweet spot rather than a fixed hoop. Its size is the species' difficulty: a Rattata
+gets a wide target, a legendary a narrow one. Some balls widen it — a Premier Ball
+flies light and true, a Master Ball is nearly impossible to miss with.
+
+The odds underneath are still the games' own formula, now with the throw folded in:
 
 ```
 a = ((3·MaxHP − 2·HP) / 3·MaxHP) · captureRate · ballBonus · statusBonus
+                                              · accuracyTier · curveBonus
 chance = (a/255)^0.75          a ≥ 255 is a guaranteed catch
 ```
 
-A worn-down Rattata is **97.5%** with a Poké Ball; a healthy Mewtwo is **1.57%**.
-The picker shows the real odds per row before you commit. A catch joins one level
-below the party so it arrives ready to fight rather than as a liability, and
-declining keeps the ball for the next boss.
+and the shakes are rolled the way the games roll them — four separate rolls at
+`(a/255)^(3/16)`, stopping at the first failure — so a near miss really does rattle
+three times before it pops open. There are critical captures too: one shake, and it
+holds.
+
+#### Resistance
+
+**Resistance** is the mirror image of the catch rate, and it is what ties the
+throwing screen back to the fight. Full health, no ailments, a rare species and a
+level above your own all push it up; a nearly-fainted, sleeping Rattata is near the
+floor. Everything that makes a catch likely makes resistance low.
+
+It drives three things:
+
+* **How the target moves** — see below.
+* **How willing it is to dodge.** A furious legendary gets out of the way of most
+  throws; something spent barely tries.
+* **How long it puts up with you.** Patience runs from two throws for something
+  furious to six for something spent, and a failed throw costs one. Run it out and
+  it stops paying you any attention.
+
+So wearing a target down is not an abstract percentage on a screen — it is visible
+in how hard the thing is to hit. The fight before the throw *is* the capture.
+
+#### Movement algorithms, one per type
+
+Each of the 18 types has **its own movement algorithm**, written as weights over a
+small set of primitives — sway, bob, parabolic leap, jolt, aerial swerve, orbit,
+teleport, burrow, jitter — plus a dodge choreography. A few of them:
+
+| Type | How it behaves |
+|---|---|
+| **Bug** | Jolts and leaps: fast, erratic, always half a body-length from where it was |
+| **Flying** | Swerves aerially, wide unhurried figure-eights, banking as it turns |
+| **Rock** | Holds nearly still, then shifts its whole weight at once |
+| **Electric** | Zigzags almost too fast to follow, snapping to a new station three times a second |
+| **Ghost** | Fades out and reappears elsewhere |
+| **Ground** | Hunkers low and dips away underfoot |
+| **Water** | Long, smooth, undulating waves |
+| **Ice** | Glides, then stops dead |
+| **Psychic** | Drifts in slow orbits, then blinks a body-length sideways |
+
+A **dual type is the blend of two profiles**, weighted 62/38 toward the primary, so
+a Bug/Flying genuinely jolts and leaps *and* swerves — and it says so on screen:
+"Jolts and leaps, then swerves aerially." Both dodge styles survive the blend, and
+it alternates between them, so a Beedrill does not only ever hop.
+
+Resistance does not merely slow the motion down. Amplitudes shrink, leaps stop
+clearing the ground, the phase begins to creep and stall so the movement *falters*
+rather than playing back at half speed, breathing goes shallow and then heaves, and
+a heavy species visibly sags. Sampling is a pure function of `(profile, time, seed,
+resistance)` — no state, no RNG — so a paused screen resumes mid-stride and two of
+the same species on screen are never in lockstep.
+
+#### Coming and going
+
+Engaging Capture zooms in on the enemy you clicked: the board darkens, the target
+flies out of its slot in the enemy line and swells into the middle of the screen,
+and the ring closes in around it from off-frame. A catch takes it out of the fight
+without it being a *death* — nothing drops, no experience is banked, and nothing
+that triggers on a kill fires. What you get instead is the Pokémon, joining a level
+below the party (and higher still out of a Friend, Luxury or Cherish Ball) so it
+arrives ready to fight rather than as a liability.
 
 ### Enemies play cards too
 
@@ -478,8 +604,68 @@ plays its single best attack every turn forever, which is both far more damaging
 and far more monotonous than the AI it replaced. Leaving it out was worth roughly
 three acts of difficulty.
 
+An enemy also **picks its target** the way the player does. It weighs the type
+matchup of the card it is actually holding, how close each of your party is to
+falling, and leans toward whoever is holding the cards — but not so hard that the
+back of the party is safe, which would make a party a shield rather than a team. A
+move it points at itself or at a hurt team-mate flies the other way and reads as a
+blessing on them rather than a hex on you.
+
 The Spire's own 45 enemies have no decks and still resolve their one scripted
 move, so that game is untouched.
+
+### Cards do not queue behind each other
+
+Playing a card used to lock the hand for the length of its animation. It does not
+any more, and the split that made that possible is worth describing because it is
+the load-bearing part of the whole thing.
+
+`Combat.play_card` is now two halves:
+
+* **`commit_card`** pays for the card and takes it out of the hand *immediately*.
+  Nothing it does can be seen. Everything that depends on the state of the board is
+  read here — Body Slam is worth the Block you had when you threw it.
+* **`resolve_commit`** lands the effects, and the UI calls it on the frame the
+  animation actually connects.
+
+Because the energy is already spent and the hand is already correct, there is
+nothing to wait for: the next card can be thrown into the same breath. Half a dozen
+cards can be in the air at once, each striking on its own beat. Because the effects
+still land on impact, the damage numbers and the blow arrive together rather than a
+beat apart — a card that resolved on release would be unsatisfying, and one that
+locked the hand would be slow.
+
+A card **rises out of its own place in the fan**, not out of wherever the cursor let
+go of it. A card taking off from mid-screen reads as something dropped; a card
+taking off from the hand reads as something played.
+
+The same applies to **enemies**. An enemy turn is staged — `enemy_turn_begin`,
+`enemy_turn_next`, `enemy_turn_end` — so its AI commits one action at a time and the
+UI launches each with a short stagger rather than waiting on it. A Pokémon spending
+three cards throws three cards, overlapping, on separate beats. The turn is only
+closed out once the last of them has landed, so end-of-turn upkeep never runs ahead
+of the blows it is supposed to follow. `_take_enemy_turn` drives those same stages
+straight through, which is what the headless harnesses use.
+
+Two things still wait, and only two: **ending your turn** waits for the board to
+settle, because an enemy must not begin its move while the last of yours is in the
+air; and an enemy's own turn waits for its own cards. Both are bounded, so a lost
+animation can never deadlock a fight.
+
+#### Dropping a card on something
+
+The drag gesture resolves **by geometry**, not by what the mouse last hovered. The
+dragged card sits under the cursor for the whole drag, so leaning on `mouse_entered`
+meant the enemy underneath never received one and the drop never found anything —
+the line was drawn and then nothing happened. `_drop_at()` asks the board directly
+what is beneath the release point: an enemy, a party panel, the acting member's own
+panel, or open ground. The dragged card is also made transparent to the mouse so
+the board underneath stays hoverable, which means the card can no longer report its
+own mouse-up — so the release is caught in `_input`, which sees it first.
+
+Positions come off the *event* rather than from the live cursor, which is what makes
+the gesture testable: `--click-test` drags a Strike onto a Jaw Worm and asserts the
+card left the hand, the energy was spent and the enemy took the hit.
 
 ### The look
 
@@ -510,7 +696,9 @@ tools/build_data.py      compacts the cache into data/*.json
 tools/fetch_sprites.py   downloads and trims the artwork
 scripts/core/
   PartyMember.gd         one Pokemon on the player's side, between fights
-  PokeCapture.gd         catch rates and the ball formula
+  PokeCapture.gd         catch rates, resistance, throw accuracy, the shake rolls
+  PokeBalls.gd           the ball catalogue: categories, rarity, price, conditions
+  PokeMotion.gd          one movement algorithm per type, blended for dual types
   PokeData.gd            loads data/, answers the type chart and evolution chains
   PokeBalance.gd         every Pokémon-number → Spire-number conversion
   PokeLevels.gd          the stat formula, XP curves and level maths
@@ -521,7 +709,8 @@ scripts/core/
   PokeEncounters.gd      BST-weighted encounter tables
 scripts/ui/PokemonSelect.gd    searchable dex picker
 scripts/ui/EvolutionScreen.gd  the evolution offer
-scripts/dev/PokeTest.gd       324 assertions over the whole layer
+scripts/ui/CaptureScreen.gd    the throwing screen: physics, rings, shakes
+scripts/dev/PokeTest.gd       386 assertions over the whole layer
 scripts/dev/Shot.gd           --poke-shots, one PNG per Pokémon-mode screen
 ```
 

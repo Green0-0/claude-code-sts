@@ -84,8 +84,13 @@ func _tick() -> void:
 	if main.card_picker.visible:
 		_drive_picker()
 		return
-	# The dex picker doubles as the post-boss capture prompt.
 	if main.pokemon_select.visible:
+		# Only reachable from the title now; captures happen in the fight.
+		main.pokemon_select.request_close()
+		return
+	# The throwing screen runs on real time and real physics, so it is driven
+	# wherever it happens to be rather than through the screen router.
+	if main.capture_screen.visible:
 		_drive_capture()
 		return
 	var screen: Control = main.current_screen
@@ -124,15 +129,21 @@ func _tick() -> void:
 				main._on_restart()
 
 
-## Always throws the ball at the first candidate, so the capture path and the
-## party growth it feeds are actually exercised.
+## Throws, over and over, until something holds or the target gives up on us.
+##
+## The driver has no mouse to flick, so it asks the screen for a synthesised
+## throw; everything downstream of the gesture — the flight, the dodge roll, where
+## it lands, the accuracy tier, the shake sequence and the party growth — is the
+## real code path.
 func _drive_capture() -> void:
-	var rows: Array = main.pokemon_select.list.get_children()
-	if rows.is_empty():
-		main.pokemon_select.request_close()
+	var cap = main.capture_screen
+	if not cap.active or cap._resolving or cap._finished or not cap._flight.is_empty():
 		return
-	report["captures"] = int(report.get("captures", 0)) + 1
-	(rows[0] as Button).emit_signal("pressed")
+	if Run.total_balls() <= 0:
+		cap._on_leave()
+		return
+	report["throws"] = int(report.get("throws", 0)) + 1
+	cap.throw_at_center(randf_range(-0.8, 0.8), randf_range(0.0, 0.7))
 
 
 ## Always evolves. The alternative branch is "stay as you are", which would let
@@ -154,8 +165,10 @@ func _signature() -> String:
 	if main.card_picker.visible:
 		s += "|picker%d" % main.card_picker._selection.size()
 	s += "|lv%d|p%d" % [Run.player_level, Run.party.size()]
-	if main.pokemon_select.visible:
-		s += "|capture"
+	# The throwing screen has its own clock, so it needs its own signature or the
+	# stall detector reads a long capture as a hang.
+	if main.capture_screen.visible:
+		s += "|throw%d|balls%d" % [main.capture_screen.throws, Run.total_balls()]
 	return s
 
 
@@ -254,6 +267,14 @@ func _drive_combat() -> void:
 			if String(Run.potions[i]) != "":
 				cs.use_potion(i)
 				return
+	# Reach for a ball now and then, so the capture path runs in a smoke test
+	# rather than only when a human plays it.
+	if Run.total_balls() > 0 and c.can_capture() and randf() < 0.12:
+		var targets: Array = c.capture_targets()
+		if not targets.is_empty():
+			report["captures"] = int(report.get("captures", 0)) + 1
+			main._on_capture_requested(targets[randi() % targets.size()])
+			return
 	# Play the most expensive playable card first; that reaches the fancier cards.
 	var best = null
 	var best_cost := -99
@@ -280,13 +301,26 @@ func _drive_combat() -> void:
 	cs._on_end_turn()
 
 
+## Each reward is a row of buttons now — claim it, or turn it down for coin. Both
+## branches are taken, because the Gold from skipping is what a Pokemon run buys
+## its balls with and the economy is only exercised if both halves run.
 func _drive_reward() -> void:
 	var rs = main.reward_screen
-	for child in rs.rows_box.get_children():
-		var btn := child as Button
-		if btn != null and not btn.disabled:
-			btn.pressed.emit()
-			return
+	for row in rs.rows_box.get_children():
+		var buttons: Array = []
+		for child in row.get_children():
+			var btn := child as Button
+			if btn != null and not btn.disabled:
+				buttons.append(btn)
+		if buttons.is_empty():
+			continue
+		# The last button on a row is the skip, when there is one.
+		if buttons.size() > 1 and randf() < 0.35:
+			report["skips"] = int(report.get("skips", 0)) + 1
+			(buttons[buttons.size() - 1] as Button).pressed.emit()
+		else:
+			(buttons[0] as Button).pressed.emit()
+		return
 	report["combats"] = int(report["combats"]) + 1
 	for rid in Run.relics:
 		_bump("relics", String(rid))
@@ -315,6 +349,14 @@ func _drive_shop() -> void:
 					and Run.gold >= int(ss.stock["potions"][i]["price"]):
 				ss._buy_potion(i)
 				return
+	# Stock up on balls whenever there is any money at all: nothing downstream of
+	# the capture screen runs without something in the bag.
+	var balls: Array = ss.stock.get("balls", [])
+	for i in range(balls.size()):
+		var entry: Dictionary = balls[i]
+		if int(entry["sold"]) < int(entry["stock"]) and Run.gold >= int(entry["price"]):
+			ss._buy_ball(i)
+			return
 	if randf() < 0.25 and not ss.remove_button.disabled:
 		ss.removal_requested.emit()
 		return
@@ -360,6 +402,9 @@ func _finish(reason: String) -> void:
 	print("[autoplay] evolutions=%d max_level=%d captures=%d max_party=%d" % [
 			int(report.get("evolutions", 0)), int(report.get("max_level", 0)),
 			int(report.get("captures", 0)), int(report.get("max_party", 1))])
+	print("[autoplay] throws=%d reward_skips=%d balls_left=%d" % [
+			int(report.get("throws", 0)), int(report.get("skips", 0)),
+			Run.total_balls()])
 	print("[autoplay] distinct_enemies=%d distinct_cards=%d distinct_relics=%d" % [
 			(report["enemies"] as Dictionary).size(), (report["cards"] as Dictionary).size(),
 			(report["relics"] as Dictionary).size()])
