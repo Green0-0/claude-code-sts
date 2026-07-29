@@ -20,7 +20,7 @@ const SAVE_PATH := "user://spire_save.json"
 ## A Spire run (Ironclad, Silent) has no party at all and uses the plain fields.
 var party: Array = []                 ## Array[PartyMember]
 var lead_index: int = 0
-const MAX_PARTY := 4
+const MAX_PARTY := 34
 
 var relics: Array = []                ## Array[String]
 var potions: Array = []               ## Array[String], "" for an empty slot

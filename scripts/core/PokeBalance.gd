@@ -225,23 +225,23 @@ static func card_type(mv: Dictionary) -> String:
 ## climbs from there. By the end it is fielding wild legendaries. Progress is
 ## 0 at the first floor and 1 at the last, so the slope stretches automatically
 ## if the run length changes.
-const BST_CAP_START := 200.0
-const BST_CAP_END := 720.0
+const BST_CAP_START := 0.0
+const BST_CAP_END := 1340.0
 
 ## How far above the running cap each encounter kind aims. Elites and bosses are
 ## the reason you meet something above your weight class.
-const KIND_BST_OFFSET := {"weak": -40, "strong": 0, "elite": 60, "boss": 130}
+const KIND_BST_OFFSET := {"weak": -400, "strong": -200, "elite": 300, "boss": 600}
 
 ## Width of the bell curve around the target. Wider early, so the opening floors
 ## stay varied rather than serving the same three species.
-const BST_SPREAD := 70.0
+const BST_SPREAD := 20.0
 
 
 ## The strongest and weakest things that exist. Aiming a band outside this range
 ## would centre the bell curve on nothing, and every candidate would fall below
 ## the minimum weight — an empty table.
-const BST_FLOOR := 190.0
-const BST_CEILING := 700.0
+const BST_FLOOR := 0.0
+const BST_CEILING := 1340.0
 
 
 ## Target BST for a slot, given how far through the run it is (0-1).

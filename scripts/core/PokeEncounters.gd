@@ -106,18 +106,27 @@ static func pick(progress: float, kind: String, rng: RandomNumberGenerator,
 	var mon := PokeData.mon_at(index)
 	var id := PokeMobs.enemy_id(String(mon["name"]), role)
 	var count := PokeBalance.group_size(mon, kind)
-
+	var random_candidate = candidates[rng.randi_range(0, candidates.size() - 1)]
 	var out: Array = []
 	out.append(id)
 	for i in range(count):
-		var random_candidate = candidates[rng.randi_range(0, candidates.size() - 1)]
 		print(Run.act_progress())
 		if rng.randf() < Run.act_progress():
 			out.append(random_candidate)
 	# Mixed packs read better than three clones, so a second species joins the
 	# weaker groups when there is room for one.
-	
 	var attempts := rng.randi_range(0, 34)
+	if count >= 2:
+		while attempts > 0:
+			attempts -= 1
+			if rng.randf() >= (progress)+0.02:
+				continue
+			
+			if count >= 2:
+				out.append(id)
+					# Optional: break early if you only need one successful result?
+					# break
+	attempts = rng.randi_range(0, 34)
 	while attempts > 0:
 		attempts -= 1
 		if rng.randf() >= progress:

@@ -279,7 +279,7 @@ func _on_party_panel_input(event: InputEvent, member: Actor) -> void:
 		return
 	if event.button_index != MOUSE_BUTTON_LEFT or combat == null:
 		return
-	if selected_view != null and selected_view.card.target_kind() == "ally":
+	if selected_view != null:# and selected_view.card.target_kind() == "ally":
 		_play_at_ally(selected_view, member)
 
 
