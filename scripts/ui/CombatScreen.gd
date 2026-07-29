@@ -49,6 +49,11 @@ var _hovered_enemy: EnemyView = null
 var _enemy_timer: Timer = null
 var _busy: bool = false
 var _log_lines: Array = []
+## slot index -> Array[CardView]. Every member's hand exists at once; card_views
+## always points at whichever of them is currently acting.
+var hand_layers: Dictionary = {}
+## One compact panel per party member, so allies can be seen and targeted.
+var party_views: Array = []
 ## The player's own ATB gauge, built to sit under its health bar.
 var player_charge_bar: ProgressBar = null
 var _card_anim: CardAnim = null
@@ -95,21 +100,47 @@ func begin(enemy_ids: Array, room_type: String) -> void:
 	combat.combat_finished.connect(_on_combat_finished)
 	combat.enemy_died.connect(_on_enemy_died)
 	combat.player_turn_started.connect(_on_player_turn_started)
+	combat.active_member_changed.connect(_on_active_member_changed)
 	_log_lines.clear()
 	combat_log.clear()
 	combat.setup(enemy_ids, room_type, Run.rng)
 	_build_enemy_views()
+	_build_party_views()
 	_rebuild_hand()
 	_refresh_all()
+
+
+## The ATB handed control to a different member: bring its hand to the front and
+## drop the previous one back into the shadowed stack.
+func _on_active_member_changed(_who: Actor) -> void:
+	if combat == null:
+		return
+	_select(null)
+	card_views = hand_layers.get(combat.player.slot_index, [])
+	_layout_hand()
+	_refresh_playability()
+	_refresh_party()
 
 
 func _clear() -> void:
 	for v in enemy_views:
 		v.queue_free()
 	enemy_views.clear()
+	for slot in hand_layers:
+		for v in hand_layers[slot]:
+			v.queue_free()
+	hand_layers.clear()
 	for v in card_views:
-		v.queue_free()
+		if is_instance_valid(v):
+			v.queue_free()
 	card_views.clear()
+	# Each entry is a dictionary of the panel and its parts, so the panel is what
+	# has to be freed.
+	for entry in party_views:
+		var panel = (entry as Dictionary).get("panel", null)
+		if panel != null and is_instance_valid(panel):
+			panel.queue_free()
+	party_views.clear()
 	selected_view = null
 	_drag_view = null
 	_drag_active = false
@@ -169,60 +200,215 @@ func _layout_enemies() -> void:
 			t.tween_property(v, "position", target_pos, 0.25)
 
 
+# ═════════════════════════════════ The party ═════════════════════════════════
+## A compact panel per member down the left, showing who is on your side, how
+## hurt they are and how charged. Clicking one targets it, which is how an
+## ally-aimed card finds its mark.
+const PARTY_PANEL := Vector2(196, 62)
+
+
+func _build_party_views() -> void:
+	# Each entry is a dictionary of the panel and its parts, so the panel is what
+	# has to be freed.
+	for entry in party_views:
+		var panel = (entry as Dictionary).get("panel", null)
+		if panel != null and is_instance_valid(panel):
+			panel.queue_free()
+	party_views.clear()
+	if combat == null or combat.party.size() <= 1:
+		return
+	for i in range(combat.party.size()):
+		var member: Actor = combat.party[i]
+		var panel := Panel.new()
+		panel.custom_minimum_size = PARTY_PANEL
+		panel.size = PARTY_PANEL
+		panel.position = Vector2(16, 210 + i * (PARTY_PANEL.y + 8))
+		panel.mouse_filter = Control.MOUSE_FILTER_STOP
+		panel.add_theme_stylebox_override("panel", UiTheme.player_style())
+
+		var label := Label.new()
+		label.position = Vector2(8, 4)
+		label.size = Vector2(PARTY_PANEL.x - 16, 20)
+		label.add_theme_font_size_override("font_size", 13)
+		label.mouse_filter = Control.MOUSE_FILTER_IGNORE
+		panel.add_child(label)
+
+		var hp := ProgressBar.new()
+		hp.position = Vector2(8, 26)
+		hp.size = Vector2(PARTY_PANEL.x - 16, 14)
+		hp.show_percentage = false
+		hp.mouse_filter = Control.MOUSE_FILTER_IGNORE
+		UiTheme.style_hp_bar(hp)
+		panel.add_child(hp)
+
+		var charge := UiTheme.make_charge_bar()
+		charge.position = Vector2(8, 44)
+		charge.size = Vector2(PARTY_PANEL.x - 16, 6)
+		panel.add_child(charge)
+
+		panel.gui_input.connect(func(ev): _on_party_panel_input(ev, member))
+		add_child(panel)
+		party_views.append({"panel": panel, "label": label, "hp": hp,
+				"charge": charge, "actor": member})
+	_refresh_party()
+
+
+func _refresh_party() -> void:
+	if combat == null:
+		return
+	for entry in party_views:
+		var member: Actor = entry["actor"]
+		var panel: Panel = entry["panel"]
+		var acting := member == combat.player
+		panel.visible = member.alive and not member.is_dead()
+		(entry["label"] as Label).text = "%s%s" % ["▸ " if acting else "", member.name]
+		(entry["label"] as Label).modulate = Color(1, 0.92, 0.62) if acting \
+				else Color(0.72, 0.72, 0.78)
+		var hp: ProgressBar = entry["hp"]
+		hp.max_value = max(1, member.max_hp)
+		hp.value = member.hp
+		var charge: ProgressBar = entry["charge"]
+		charge.value = combat.charge_ratio(member) * 100.0
+		# The acting member's panel is lit; the rest are shadowed like their hands.
+		panel.modulate = Color.WHITE if acting else Color(0.66, 0.65, 0.72)
+
+
+## Clicking a party panel points the selected card at that member.
+func _on_party_panel_input(event: InputEvent, member: Actor) -> void:
+	if not (event is InputEventMouseButton) or not event.pressed:
+		return
+	if event.button_index != MOUSE_BUTTON_LEFT or combat == null:
+		return
+	if selected_view != null and selected_view.card.target_kind() == "ally":
+		_play_at_ally(selected_view, member)
+
+
+func _play_at_ally(view: CardView, member: Actor) -> void:
+	if combat == null or combat.phase != "player" or _busy:
+		return
+	combat.ally_target = member
+	_try_play(view, -1)
+	combat.ally_target = null
+
+
 # ═════════════════════════════════ Hand layout ═══════════════════════════════
+## Every party member's hand is on screen at once, stacked in layers.
+##
+## The member whose gauge filled has its fan at the front, at full size and
+## fully lit; the rest sit behind it, smaller, pushed up and back, and shadowed
+## down so they read as context rather than clutter. Swapping who is acting
+## re-sorts the layers rather than rebuilding them, so the swap is a movement
+## rather than a redraw.
+
+## How far back each inactive layer sits, and how much of its colour survives.
+const LAYER_STEP := Vector2(0, -46.0)
+const LAYER_SCALE := 0.78
+const LAYER_SHADOW := Color(0.34, 0.33, 0.42)
+const LAYER_Z := -40
+
+
 func _rebuild_hand() -> void:
-	var wanted: Array = []
-	for c in combat.hand:
-		wanted.append(c.uid)
-	var current: Array = []
-	for v in card_views:
-		current.append(v.card.uid)
+	# One list of views per party member, keyed by slot.
+	var wanted := {}
+	for a in combat.party:
+		var member: Actor = a
+		var uids: Array = []
+		for c in member.hand:
+			uids.append(c.uid)
+		wanted[member.slot_index] = uids
+
+	var current := {}
+	for slot in hand_layers:
+		var uids2: Array = []
+		for v in hand_layers[slot]:
+			uids2.append(v.card.uid)
+		current[slot] = uids2
+
 	if wanted == current:
-		for v in card_views:
-			v.combat = combat
-			v.set_playable(combat.can_play(v.card, 0 if v.card.needs_target() else -1)["ok"])
-			v.refresh()
+		for slot in hand_layers:
+			for v in hand_layers[slot]:
+				v.combat = combat
+				v.refresh()
 		_layout_hand()
+		_refresh_playability()
 		return
 
-	for v in card_views:
-		v.queue_free()
+	for slot in hand_layers:
+		for v in hand_layers[slot]:
+			v.queue_free()
+	hand_layers.clear()
 	card_views.clear()
-	for c in combat.hand:
-		var view: CardView = CARD_SCENE.instantiate()
-		hand_area.add_child(view)
-		view.setup(c, combat)
-		view.pressed.connect(_on_card_pressed)
-		view.released.connect(_on_card_released)
-		view.hover_changed.connect(_on_card_hover)
-		card_views.append(view)
+
+	for a in combat.party:
+		var member: Actor = a
+		var views: Array = []
+		for c in member.hand:
+			var view: CardView = CARD_SCENE.instantiate()
+			hand_area.add_child(view)
+			view.setup(c, combat)
+			view.pressed.connect(_on_card_pressed)
+			view.released.connect(_on_card_released)
+			view.hover_changed.connect(_on_card_hover)
+			views.append(view)
+		hand_layers[member.slot_index] = views
+		if member == combat.player:
+			card_views = views
 	_layout_hand(true)
 	_refresh_playability()
 
 
 func _layout_hand(instant: bool = false) -> void:
-	var n := card_views.size()
+	if combat == null:
+		return
+	# Inactive layers are ordered by how far they are from the active one, so the
+	# stack reads as depth rather than as party order.
+	var active_slot := combat.player.slot_index if combat.player != null else 0
+	var depth := 0
+	var slots: Array = hand_layers.keys()
+	slots.sort()
+	for slot in slots:
+		if int(slot) == active_slot:
+			continue
+		depth += 1
+		_layout_layer(hand_layers[slot], depth, instant)
+	_layout_layer(hand_layers.get(active_slot, []), 0, instant)
+
+
+## Lays out one member's fan. depth 0 is the acting member, at the front.
+func _layout_layer(views: Array, depth: int, instant: bool) -> void:
+	var n := views.size()
 	if n == 0:
 		return
+	var active := depth == 0
+	var scale_factor: float = 1.0 if active else pow(LAYER_SCALE, float(depth))
 	var spacing: float = minf(168.0, maxf(70.0, (hand_area.size.x - 240.0) / float(n)))
+	spacing *= scale_factor
 	var center_x := hand_area.size.x * 0.5
 	var base_y := hand_area.size.y - CardView.CARD_SIZE.y - 18.0
+	var offset_y := LAYER_STEP.y * float(depth)
+
 	for i in range(n):
-		var v: CardView = card_views[i]
+		var v: CardView = views[i]
 		var offset := float(i) - float(n - 1) * 0.5
 		var norm := offset / maxf(1.0, float(n - 1) * 0.5)
 		# The fan arcs upward in the middle; the outermost cards sit on base_y so
 		# nothing is ever pushed off the bottom of the screen.
-		v.home_position = Vector2(center_x + offset * spacing - CardView.CARD_SIZE.x * 0.5,
-				base_y - (1.0 - norm * norm) * 26.0)
+		v.home_position = Vector2(
+				center_x + offset * spacing - CardView.CARD_SIZE.x * scale_factor * 0.5,
+				base_y + offset_y - (1.0 - norm * norm) * 26.0 * scale_factor)
 		v.home_rotation = offset * 0.035
-		v.home_scale = 1.0
-		v.z_index = i
+		v.home_scale = scale_factor
+		# Only the acting member's cards are live; the rest are scenery you can
+		# read but not play, which is what keeps the layered look from being a
+		# hazard.
+		v.interactive = active
+		v.z_index = i if active else LAYER_Z * depth + i
+		v.modulate = Color.WHITE if active else LAYER_SHADOW
 		if v == _drag_view and _drag_active:
 			continue
 		if instant:
 			v.snap_home()
-		elif v.selected:
+		elif v.selected and active:
 			v.lift()
 		else:
 			v.tween_home()
@@ -646,6 +832,7 @@ func _refresh_all() -> void:
 	player_hp_label.text = "%d / %d" % [p.hp, p.max_hp]
 	player_block.visible = p.block > 0
 	player_block.text = "🛡 %d" % p.block
+	_refresh_party()
 	if player_charge_bar != null:
 		player_charge_bar.value = combat.charge_ratio(p) * 100.0
 		player_charge_bar.modulate = Color(1, 1, 1).lerp(

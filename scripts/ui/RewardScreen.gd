@@ -43,6 +43,11 @@ func _rebuild() -> void:
 				if levels > 0:
 					btn.text += "   —   Level %d!" % int(r.get("level", 0))
 				btn.disabled = true
+			"ball":
+				var bd := PokeCapture.ball_def(String(r["id"]))
+				btn.text = "◓  %s — throw it after this act" % String(bd["name"])
+				btn.tooltip_text = String(bd["desc"])
+				btn.disabled = true
 			"gold":
 				btn.text = "💰  %d Gold" % int(r["amount"])
 			"cards":

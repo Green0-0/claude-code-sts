@@ -23,9 +23,14 @@ const START_LEVEL := 5
 ## conventional "average" stand-in for individual values.
 const AVERAGE_IV := 15
 
-## How far ahead of the dungeon's level each encounter role is. This is what
-## makes an elite worth the relic and a boss worth the act.
-const ROLE_LEVEL_BONUS := {"normal": 0, "elite": 2, "boss": 4}
+## How far ahead of the dungeon's level each encounter role is.
+##
+## Deliberately small. An elite and a boss are supposed to be frightening because
+## of *what* they are — a higher-BST species out of the encounter curve's upper
+## tail — not because their level was shoved up. Spiking levels is the blunt way
+## to make a fight hard and it makes the curve feel arbitrary; letting the BST
+## band do the work keeps it legible.
+const ROLE_LEVEL_BONUS := {"normal": 0, "elite": 1, "boss": 2}
 
 
 static func role_level(base_level: int, role: String) -> int:

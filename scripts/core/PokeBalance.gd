@@ -38,16 +38,23 @@ static func role_hp_multiplier(role: String) -> float:
 	return 1.0
 
 
-## A party member is outnumbered — two or three opponents act against each of
-## your side, every fight — so player HP carries a flat counterweight on top of
-## the species formula. Without it the trade is lost on arithmetic alone.
+## A lone Pokemon against a pack of two or three loses the trade on arithmetic
+## alone — a level 5 Bulbasaur has 28 unadjusted HP against 24 damage a round.
+## Player HP therefore carries a counterweight, and that counterweight **shrinks
+## as the party grows**, because a full party no longer needs it: four bodies
+## against three is already a fair fight.
 ##
-## INTERIM VALUE. This is sized for a party of one, which is what the game
-## currently fields: a level 5 Bulbasaur has 28 HP against 24 damage a round from
-## two Cubchoo, and loses. Once the party system lands and both sides put three
-## bodies on the field, the trade evens out on its own and this should come back
-## down to about 1.4 — it is propping up a temporary asymmetry, not a real rule.
-const PACK_SCALE := 2.6
+## Solo runs keep the full 2.6; a party of four drops to 1.4, which is the value
+## the maths actually wants once both sides are fielding a team.
+const PACK_SCALE_SOLO := 2.6
+const PACK_SCALE_FULL := 1.4
+const PACK_SCALE_AT := 4
+
+
+static func pack_scale(party_size: int) -> float:
+	var n := clampi(party_size, 1, PACK_SCALE_AT)
+	var t := float(n - 1) / float(max(1, PACK_SCALE_AT - 1))
+	return lerpf(PACK_SCALE_SOLO, PACK_SCALE_FULL, t)
 
 
 ## HP a party member has at a level.
@@ -56,9 +63,10 @@ const PACK_SCALE := 2.6
 ## levelling and evolving, and by the opponent BST cap starting low (see
 ## bst_cap). That is the design the balance rests on, rather than a multiplier
 ## that quietly made Magikarp less like Magikarp.
-static func player_hp(mon: Dictionary, level: int) -> int:
+static func player_hp(mon: Dictionary, level: int, party_size: int = 1) -> int:
 	var base := int((mon.get("stats", {}) as Dictionary).get("hp", 50))
-	return max(20, int(round(PokeLevels.stat_at(base, level, true) * PACK_SCALE)))
+	return max(20, int(round(PokeLevels.stat_at(base, level, true)
+			* pack_scale(party_size))))
 
 
 ## Energy per turn. Fast Pokemon get to do more each turn, which is the main
@@ -251,31 +259,48 @@ static func band_for_progress(progress: float, kind: String) -> Array:
 	return [bst_target(progress, kind), BST_SPREAD]
 
 
-## Relative likelihood of meeting this species in this slot. A Gaussian on BST,
-## which is what makes the encounter percentages "largely depend on BST".
+## How much of the weight lives in the long tail rather than the band.
+##
+## A bare Gaussian falls off so fast that anything three bands away is
+## arithmetically impossible, which would mean the dungeon simply cannot show you
+## a Dragonite in Act 1. The curve is therefore a narrow bell for the band plus a
+## much wider, much shallower one underneath it: every species stays reachable at
+## every point in the run, but far-off ones are rare spice rather than routine.
+## Roughly 4-6% of early encounters come out of the tail.
+const TAIL_WEIGHT := 0.02
+const TAIL_SPREAD := 4.0
+
+## Legendaries and mythicals are spice wherever they appear, not a wall. They get
+## rarer the further from their band you are, like everything else, and this is
+## on top of that — they are never routine, but they are never impossible either.
+const EXOTIC_RARITY := 0.12
+
+
+## Relative likelihood of meeting this species in this slot.
+##
+## This is the number the whole design turns on: difficulty comes from *which*
+## species the dungeon reaches for, not from bending their stats or spiking their
+## level. Early on the curve sits over the Caterpie end of the dex and a Dragonite
+## is a shock; late on it sits over the legendaries and a Rattata is a curiosity.
 static func encounter_weight(mon: Dictionary, progress: float, kind: String) -> float:
 	var band := band_for_progress(progress, kind)
 	var centre := float(band[0])
 	var spread := float(band[1])
 	var bst := float(mon.get("bst", 400))
 	var z := (bst - centre) / spread
+
+	# Narrow bell for the band, wide shallow one for the tail.
 	var w: float = exp(-0.5 * z * z)
+	var tz := z / TAIL_SPREAD
+	w += TAIL_WEIGHT * exp(-0.5 * tz * tz)
 
-	# Nothing above the running cap gets in at all, whatever the curve says.
-	# This is the promise that the opening floors stay survivable.
-	if bst > bst_target(progress, kind) + spread * 1.5:
-		return 0.0
-
-	# Legendaries and mythicals are late-run material. They open up as the cap
-	# reaches them, which is what makes the last act feel different.
 	var exotic := bool(mon.get("legendary", false)) or bool(mon.get("mythical", false))
 	if exotic:
+		w *= EXOTIC_RARITY
+		# A boss slot is where you are *meant* to meet one, once the band has
+		# climbed far enough that it is not a random execution.
 		if kind == "boss":
-			w *= 3.0
-		elif progress >= 0.75:
-			w *= 0.6          # wild legendaries, late and rare
-		else:
-			w = 0.0
+			w *= 8.0
 	# Babies are always the weakest thing in the dungeon.
 	if bool(mon.get("baby", false)) and kind != "weak":
 		w *= 0.25

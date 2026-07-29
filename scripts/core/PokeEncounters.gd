@@ -10,9 +10,10 @@ extends RefCounted
 ## where the legendaries live. Nothing is hand-listed: the whole dex is in the
 ## table and BST decides how often you see each entry.
 
-## Weights below this are treated as zero, so the tail of the curve does not
-## fill every table with thousands of near-impossible entries.
-const MIN_WEIGHT := 0.02
+## Weights below this are dropped. Deliberately tiny: the point of the tail in
+## PokeBalance.encounter_weight is that every species stays reachable, so this
+## only exists to keep genuinely negligible entries out of the table.
+const MIN_WEIGHT := 0.0002
 
 ## Progress is continuous but tables are cached, so it is bucketed. Twenty steps
 ## across a run is fine enough that the climb is smooth and coarse enough that

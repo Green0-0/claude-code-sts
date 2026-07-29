@@ -33,6 +33,7 @@ var _pending_event_request: String = ""
 var _room_type: String = "monster"
 var _toast_timer: Timer = null
 var _pending_evolution: Array = []
+var _capturing: bool = false
 
 
 func _ready() -> void:
@@ -48,7 +49,10 @@ func _ready() -> void:
 	title_screen.start_requested.connect(_on_start_run)
 	title_screen.continue_requested.connect(_on_continue_run)
 	title_screen.pokemon_requested.connect(func(): pokemon_select.open())
-	pokemon_select.chosen.connect(func(id): title_screen.start_with(id))
+	pokemon_select.chosen.connect(_on_pokemon_picked)
+	pokemon_select.cancelled.connect(func():
+		if _capturing:
+			_on_capture_cancelled())
 	map_screen.node_chosen.connect(_on_map_node_chosen)
 	combat_screen.combat_over.connect(_on_combat_over)
 	combat_screen.choice_needed.connect(_on_combat_choice)
@@ -233,6 +237,11 @@ func _on_combat_over(victory: bool) -> void:
 		var brid := Run.random_relic("boss")
 		if brid != "":
 			rewards.append({"kind": "relic", "id": brid})
+		# Every boss hands over a ball, better each time.
+		if Run.is_pokemon_run():
+			var ball := PokeCapture.ball_for_boss(Run.bosses_slain)
+			Run.balls.append(ball)
+			rewards.append({"kind": "ball", "id": ball})
 	if Run.rng.randf() < (0.4 if _room_type != "boss" else 1.0) and Run.has_potion_space():
 		rewards.append({"kind": "potion", "id": PotionLibrary.random_potion(Run.rng)})
 	_show(reward_screen)
@@ -275,6 +284,15 @@ func _offer_evolution() -> bool:
 	return true
 
 
+## The dex picker is used both to start a run and to aim a ball, so its choice
+## has to be routed by what it was opened for.
+func _on_pokemon_picked(id: String) -> void:
+	if _capturing:
+		_on_capture_target(id)
+	else:
+		title_screen.start_with(id)
+
+
 func _on_evolution_chosen(index: int) -> void:
 	if index >= 0 and index < _pending_evolution.size():
 		var branch: Dictionary = _pending_evolution[index]
@@ -292,8 +310,79 @@ func _on_evolution_chosen(index: int) -> void:
 	_return_to_map()
 
 
+## Every boss hands over a ball. Spending it is a whole beat of its own, so it
+## happens before the act advances rather than being buried in the reward list.
+func _offer_capture() -> bool:
+	if not Run.is_pokemon_run() or Run.balls.is_empty():
+		return false
+	if Run.party.size() >= Run.MAX_PARTY:
+		show_toast("Your party is full — the ball goes unused.")
+		Run.balls.pop_front()
+		return false
+	var candidates: Array = []
+	for name in Run.seen_species:
+		if not _already_in_party(String(name)):
+			candidates.append(name)
+	if candidates.is_empty():
+		return false
+	_capturing = true
+	pokemon_select.open_capture(candidates, String(Run.balls[0]))
+	return true
+
+
+func _already_in_party(species: String) -> bool:
+	for m in Run.party:
+		if (m as PartyMember).species_name() == species:
+			return true
+	return false
+
+
+func _on_capture_target(character_id: String) -> void:
+	_capturing = false
+	var ball := String(Run.balls.pop_front()) if not Run.balls.is_empty() else "poke"
+	var mon := PokeCharacters.mon_for(character_id)
+	if mon.is_empty():
+		_continue_after_boss()
+		return
+	# The throw uses the same odds the picker showed.
+	var max_hp := PokeBalance.player_hp(mon, Run.player_level)
+	var weakened := int(round(max_hp * PokeCapture.CAPTURE_HP_FRACTION))
+	var chance := PokeCapture.catch_chance(mon, ball, weakened, max_hp)
+	var name := PokeData.display_name(String(mon["name"]))
+	if Run.rng.randf() < chance:
+		var level := PokeCapture.joining_level(Run.player_level)
+		if Run.add_to_party(String(mon["name"]), level):
+			show_toast("Gotcha! %s joined the party at level %d." % [name, level])
+		else:
+			show_toast("%s was caught, but the party is full." % name)
+	else:
+		show_toast("%s broke free! The ball is spent." % name)
+	_continue_after_boss()
+
+
+func _on_capture_cancelled() -> void:
+	# Declining keeps the ball for the next boss rather than wasting it.
+	_capturing = false
+	_continue_after_boss()
+
+
+func _continue_after_boss() -> void:
+	if Run.act >= Run.acts_in_run():
+		_game_over(true)
+		return
+	if Run.advance_act():
+		show_toast("Act %d." % Run.act)
+		_go_to_map()
+	else:
+		_game_over(true)
+
+
 func _after_boss() -> void:
-	if Run.act >= Run.ACTS:
+	# Spend the ball first — a new team-mate should arrive before the next act
+	# starts, not after you have already walked into it.
+	if _offer_capture():
+		return
+	if Run.act >= Run.acts_in_run():
 		_game_over(true)
 		return
 	if Run.advance_act():

@@ -25,7 +25,7 @@ The main scene is `scenes/Main.tscn`.
 
 ```bash
 godot --headless -- --rules-test   # 69 assertions on the combat maths
-godot --headless -- --poke-test    # 227 assertions on the Pokémon layer
+godot --headless -- --poke-test    # 297 assertions on the Pokémon layer
 godot --headless -- --smoke        # one self-played run, prints a report
 godot --headless -- --smoke-deep   # 8 runs, immortal player, full 3-act coverage
 godot --headless -- --smoke-poke   # 8 self-played Pokémon runs
@@ -318,17 +318,32 @@ player who has not yet acted cannot be killed, so you always get your first turn
 
 ### Encounters depend on BST
 
-Nothing is hand-listed. Every species carries a weight in every slot, and that
-weight is a **bell curve over its base stat total** centred on a cap that climbs
-with how far through the run you are — not with the act number, so the slope
-stretches automatically if the run length changes.
+Nothing is hand-listed, and **nothing is ever excluded**. Every one of the 1025
+species is in every encounter table; what changes is how likely each is. The
+weight is a narrow bell curve over base stat total, centred on a band that climbs
+with how far through the run you are, *plus* a much wider and shallower curve
+underneath it. That tail is the point: it keeps a Dragonite in Act 1 possible —
+rare spice rather than an arithmetic impossibility — and it is roughly 5% of
+early encounters.
 
-The run opens genuinely low, around **210 BST** for a normal encounter — the
-Caterpie and Rattata end of the dex — so a player who picked a weak starter is
-not immediately outclassed. It climbs on an eased curve to **680**, and anything
-above the running cap is excluded outright rather than merely unlikely. Dragonite
-cannot appear on the first floor at any probability; by the end, wild legendaries
-do (Zapdos at 0.34% of a late "strong" slot), and boss slots reach past that.
+The band opens around **210 BST** for a normal encounter, the Caterpie and Rattata
+end of the dex, and climbs on an eased curve to **680**. Measured, for a "strong"
+slot:
+
+| progress | band | rattata | caterpie | dragonite | mewtwo |
+|---|---|---|---|---|---|
+| start | 250 | 0.383% | 0.283% | 0.0034% | 0.0003% |
+| middle | 414 | 0.018% | 0.005% | 0.0098% | 0.0003% |
+| end | 700 | 0.016% | 0.011% | **1.069%** | **0.332%** |
+
+Legendaries carry a flat rarity multiplier on top and an eightfold boost in boss
+slots, so they are spice wherever they turn up and a real prospect as a late boss.
+
+**Difficulty comes from which species the dungeon reaches for, not from bending
+stats or spiking levels.** Enemy stats are never scaled down, and the role level
+bonuses are deliberately tiny (+1 elite, +2 boss) — an elite is frightening
+because the curve reached into its upper tail for something bigger, which is
+legible, not because its level was shoved up, which is not.
 
 Levels climb on the same progress: the dungeon fields level 5 on the first floor
 and level 55 on the last, with elites +3 and bosses +6. A mob only knows moves
@@ -336,8 +351,8 @@ its level says it knows, so an Act 1 Deerling cannot open with the level-40
 Double-Edge it eventually learns — and the same species met in Act 4 is genuinely
 more dangerous rather than simply having more HP.
 
-The run is four acts rather than three, for a longer climb with room to evolve
-twice.
+A Pokémon run is four acts rather than three, for a longer climb with room to
+evolve twice. Ironclad and Silent keep their original three.
 
 `PokeEncounters.probability(name, progress, kind)` returns the actual percentage,
 and `top_candidates(progress, kind)` lists the likeliest — both are asserted on by
@@ -371,27 +386,97 @@ while asleep, **Yawn** matures into Sleep, **Heal Block** stops healing and
 **Embargo** seals potions. All seven **stat stages** are modelled at the real
 ±50%-per-step multipliers, capped at ±6, and Artifact can shrug off a drop.
 
-### Not built yet
+### The party, and catching things
 
-Three pieces of the intended design are not in the game. They are listed here
-rather than half-implemented, because each one changes the same code paths and a
-partial version would break what does work:
+The player's side is a **party of up to four**. Each member is a full Pokémon in
+its own right: its own species, level, experience, HP pool and **its own deck**.
+`RunState` keeps the old single-character names (`character`, `deck`, `hp`,
+`player_level`) as proxies onto the lead member, which is why rewards, shops,
+events and the card picker all carried on working while the party grew
+underneath them.
 
-* **Enemies do not use cards.** They still pick a move from a table and resolve
-  it. Giving them their own energy, decks drawn from their learnsets, and the
-  same card animations is the next step, and the ATB engine is the prerequisite
-  that is now in place.
-* **The party is a party of one.** Multi-character play — layered hands with the
-  active character's cards in front and the rest shadowed behind, swapping on
-  character change, allies targetable by any card — is not started. This is what
-  `PACK_SCALE` is currently propping up: one body against two or three loses the
-  trade on arithmetic, so player HP carries an interim ×2.6 that should come back
-  down to about ×1.4 once both sides field three.
-* **The art pass has not happened.** The look is still the functional
-  Spire-derived theme, not the kawaii dark-fairytale one. Note that this project
-  has no raster assets and no way to author them here, so that work has to be
-  procedural: theme and palette, `_draw` on the card and actor views, gradients
-  and shaders, particles and tweens.
+In combat every member is an Actor with its **own ATB gauge, own hand, own draw
+and discard piles, and own energy**. Control passes to whoever charges first, and
+`Combat.hand`/`energy` proxy through to whoever that is — so the hundred-odd
+rules that say `hand` now mean "the acting member's hand" without being rewritten.
+Losing a member does not lose the fight; the party fights on until all of them
+are down.
+
+**Experience is shared** with everyone still standing, Exp-Share style. A party
+that levelled unevenly would stop being a party — the back two would fall off the
+curve and never return.
+
+**Cards can be aimed at team-mates.** Moves the games target at an ally (Helping
+Hand, Heal Pulse, Aromatic Mist) become ally-targeted cards; clicking a party
+panel throws the selected card at that member.
+
+#### Layered hands
+
+Every member's hand is on screen at once. The member whose gauge filled has its
+fan at the front, full size and fully lit; the others sit behind it, progressively
+smaller, pushed up and back, and shadowed down so they read as depth rather than
+clutter. Only the acting member's cards are interactive — the rest are scenery you
+can read but not misclick. When the ATB hands control over, the layers *re-sort*
+rather than rebuild, so the swap is a movement.
+
+#### Pokéballs
+
+Every boss hands over one ball, better each time — **Poké, Great, Ultra, Master**.
+You throw it at any species you have actually met, and the odds are the games'
+own formula against the imported capture rates:
+
+```
+a = ((3·MaxHP − 2·HP) / 3·MaxHP) · captureRate · ballBonus · statusBonus
+chance = (a/255)^0.75          a ≥ 255 is a guaranteed catch
+```
+
+A worn-down Rattata is **97.5%** with a Poké Ball; a healthy Mewtwo is **1.57%**.
+The picker shows the real odds per row before you commit. A catch joins one level
+below the party so it arrives ready to fight rather than as a liability, and
+declining keeps the ball for the next boss.
+
+### Enemies play cards too
+
+An enemy Pokémon is not a script any more. Each one spawns with a **deck built
+from the moves its level says it knows** (two copies each, one of Struggle), its
+own energy, and its own draw/hand/discard piles. On its ATB turn it refills
+energy, draws back up to a hand, plays cards, then discards the rest and
+reshuffles when the pile runs out — exactly the loop the player is in.
+
+Its energy and its cards-per-turn are far below the player's, and deliberately
+so: there are two or three of them to each of you, each on its own gauge, so a
+player-sized enemy turn triples what an encounter puts out. Measured: with a
+full turn each, runs died on the first act. One card a turn is what a single
+scripted move used to be, which is the throughput the rest of the balance was
+built against; elites get two and bosses three, so being able to combo is what
+makes them frightening.
+
+The card choice reuses the same scoring the scripted AI used, **including its
+anti-repeat rule and its jitter**. That part is not cosmetic: without it an enemy
+plays its single best attack every turn forever, which is both far more damaging
+and far more monotonous than the AI it replaced. Leaving it out was worth roughly
+three acts of difficulty.
+
+The Spire's own 45 enemies have no decks and still resolve their one scripted
+move, so that game is untouched.
+
+### The look
+
+Everything is drawn in code — the project ships no raster art of its own, so the
+aesthetic has to come from geometry, colour and motion.
+
+`Backdrop.gd` replaces the flat background fill with three cheap layers: a
+vertical wash from plum through a warm horizon to near-black, so the screen has a
+floor and a sky; slow-drifting motes in rose, violet, candlelight and witch-light,
+each with its own drift and pulse so they never move as a sheet; and a vignette
+that closes the corners in. Nothing in it reacts to gameplay, so it never
+competes with the cards. Its RNG is fixed-seeded, so the backdrop is identical
+every run.
+
+Cards are painted by their move's own type — a yellow Thunder Shock, a red Double
+Kick — with the type and damage class on the face, and the theme carries a
+violet-tinted palette with generously rounded corners throughout, which is the
+cheapest way to read as friendly rather than severe.
 
 ### Where it lives
 
@@ -399,6 +484,8 @@ partial version would break what does work:
 tools/fetch_pokeapi.py   mirrors the API into .pokecache/
 tools/build_data.py      compacts the cache into data/*.json
 scripts/core/
+  PartyMember.gd         one Pokemon on the player's side, between fights
+  PokeCapture.gd         catch rates and the ball formula
   PokeData.gd            loads data/, answers the type chart and evolution chains
   PokeBalance.gd         every Pokémon-number → Spire-number conversion
   PokeLevels.gd          the stat formula, XP curves and level maths
@@ -409,7 +496,7 @@ scripts/core/
   PokeEncounters.gd      BST-weighted encounter tables
 scripts/ui/PokemonSelect.gd    searchable dex picker
 scripts/ui/EvolutionScreen.gd  the evolution offer
-scripts/dev/PokeTest.gd       227 assertions over the whole layer
+scripts/dev/PokeTest.gd       297 assertions over the whole layer
 scripts/dev/Shot.gd           --poke-shots, one PNG per Pokémon-mode screen
 ```
 

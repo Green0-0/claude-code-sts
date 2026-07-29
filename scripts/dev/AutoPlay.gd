@@ -51,7 +51,7 @@ func _ready() -> void:
 	target_runs = 8 if immortal else 1
 	report = {"combats": 0, "cards_played": 0, "turns": 0, "rooms": {}, "runs": 0,
 			"enemies": {}, "cards": {}, "relics": {}, "acts_reached": 1, "errors": [],
-			"evolutions": 0, "max_level": 0}
+			"evolutions": 0, "max_level": 0, "captures": 0, "max_party": 1}
 	print("[autoplay] starting (immortal=%s, runs=%d)" % [immortal, target_runs])
 
 
@@ -83,6 +83,10 @@ func _tick() -> void:
 
 	if main.card_picker.visible:
 		_drive_picker()
+		return
+	# The dex picker doubles as the post-boss capture prompt.
+	if main.pokemon_select.visible:
+		_drive_capture()
 		return
 	var screen: Control = main.current_screen
 	if screen == null:
@@ -120,6 +124,17 @@ func _tick() -> void:
 				main._on_restart()
 
 
+## Always throws the ball at the first candidate, so the capture path and the
+## party growth it feeds are actually exercised.
+func _drive_capture() -> void:
+	var rows: Array = main.pokemon_select.list.get_children()
+	if rows.is_empty():
+		main.pokemon_select.request_close()
+		return
+	report["captures"] = int(report.get("captures", 0)) + 1
+	(rows[0] as Button).emit_signal("pressed")
+
+
 ## Always evolves. The alternative branch is "stay as you are", which would let
 ## a run coast without ever testing the evolution path.
 func _drive_evolution() -> void:
@@ -138,7 +153,9 @@ func _signature() -> String:
 				c.discard_pile.size()]
 	if main.card_picker.visible:
 		s += "|picker%d" % main.card_picker._selection.size()
-	s += "|lv%d" % Run.player_level
+	s += "|lv%d|p%d" % [Run.player_level, Run.party.size()]
+	if main.pokemon_select.visible:
+		s += "|capture"
 	return s
 
 
@@ -229,6 +246,7 @@ func _drive_combat() -> void:
 		c.player.hp = c.player.max_hp
 		Run.hp = Run.max_hp
 	report["max_level"] = maxi(int(report.get("max_level", 0)), Run.player_level)
+	report["max_party"] = maxi(int(report.get("max_party", 1)), Run.party.size())
 	for e in c.living_enemies():
 		_bump("enemies", e.enemy_id)
 	if randf() < 0.03:
@@ -339,8 +357,9 @@ func _finish(reason: String) -> void:
 	print("[autoplay] rooms=%s" % JSON.stringify(report["rooms"]))
 	print("[autoplay] combats=%d cards_played=%d turns=%d" % [int(report["combats"]),
 			int(report["cards_played"]), int(report["turns"])])
-	print("[autoplay] evolutions=%d max_level=%d" % [
-			int(report.get("evolutions", 0)), int(report.get("max_level", 0))])
+	print("[autoplay] evolutions=%d max_level=%d captures=%d max_party=%d" % [
+			int(report.get("evolutions", 0)), int(report.get("max_level", 0)),
+			int(report.get("captures", 0)), int(report.get("max_party", 1))])
 	print("[autoplay] distinct_enemies=%d distinct_cards=%d distinct_relics=%d" % [
 			(report["enemies"] as Dictionary).size(), (report["cards"] as Dictionary).size(),
 			(report["relics"] as Dictionary).size()])

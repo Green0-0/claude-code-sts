@@ -228,8 +228,14 @@ static func _target_kind(mv: Dictionary) -> String:
 	match String(mv.get("target", "selected-pokemon")):
 		"all-opponents", "all-other-pokemon", "all-pokemon", "entire-field":
 			return "all"
-		"user", "users-field", "user-and-allies", "ally":
+		"user":
 			return "self"
+		# Moves the games aim at a team-mate — Helping Hand, Heal Pulse, Aromatic
+		# Mist — become ally-targeted cards rather than collapsing onto the user.
+		"ally", "user-and-allies", "all-allies":
+			return "ally"
+		"users-field":
+			return "party"
 		"random-opponent":
 			return "random"
 	# A status move that only changes the user's own stats targets the user even

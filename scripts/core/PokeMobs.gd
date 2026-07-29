@@ -247,6 +247,46 @@ static func _intent_for(card: Dictionary) -> String:
 
 
 # ══════════════════════════════════ Spawning ═════════════════════════════════
+## An enemy plays cards under exactly the same rules as the player — draw a hand,
+## spend energy, discard, reshuffle — so a fight is symmetrical rather than one
+## side playing a different game.
+##
+## Its energy is deliberately far below the player's, though. There are two or
+## three of them to each of you and each acts on its own gauge, so giving them a
+## player-sized turn triples what the encounter puts out and the run dies on the
+## first act — measured. One energy buys roughly what a single scripted move used
+## to do, which is the throughput the rest of the balance was built against;
+## elites and bosses get more because being able to combo is what makes them
+## frightening.
+## Energy alone does not bound a turn, because plenty of moves cost nothing —
+## an enemy holding three 0-cost cards would play all three however little energy
+## it had. So the number of cards a turn is capped directly. One card is what a
+## single scripted move used to be, which is the throughput the rest of the
+## balance was built against.
+const DECK_COPIES := 2
+const ENEMY_ENERGY := {"normal": 1, "elite": 2, "boss": 3}
+const ENEMY_CARDS_PER_TURN := {"normal": 1, "elite": 2, "boss": 3}
+const ENEMY_DRAW := 3
+
+
+## The deck an enemy fights with, built from the moves its level says it knows.
+static func build_deck(id: String) -> Array:
+	var d := get_def(id)
+	var out: Array = []
+	for move_name in d.get("moves", {}):
+		var mv := PokeData.move(String(move_name).to_lower().replace(" ", "-"))
+		if mv.is_empty():
+			continue
+		var card_id := PokeMoves.card_id(String(mv["name"]))
+		if PokeMoves.get_def(card_id).is_empty():
+			continue
+		# Struggle is the last resort, so it gets a single copy rather than two.
+		var copies := 1 if String(mv["name"]) == "struggle" else DECK_COPIES
+		for i in range(copies):
+			out.append(card_id)
+	return out
+
+
 ## Attaches the species' stats and types to a freshly spawned Actor, which is
 ## what every Pokemon rule in Combat keys off.
 static func decorate(a: Actor, id: String) -> void:
@@ -259,6 +299,12 @@ static func decorate(a: Actor, id: String) -> void:
 	a.poke_types = mon["types"]
 	a.level = int(d.get("level", PokeLevels.START_LEVEL))
 	a.name = "%s Lv%d" % [String(d["name"]), a.level]
+	var role := String(d.get("role", "normal"))
+	a.energy_per_turn = int(ENEMY_ENERGY.get(role, 1))
+	a.cards_per_turn = int(ENEMY_CARDS_PER_TURN.get(role, 1))
+	a.base_draw = ENEMY_DRAW
+	for card_id in build_deck(id):
+		a.draw_pile.append(Card.create(card_id))
 
 
 # ════════════════════════════════════ AI ═════════════════════════════════════

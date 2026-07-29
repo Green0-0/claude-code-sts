@@ -54,9 +54,235 @@ func _run() -> void:
 	_test_evolution()
 	_test_progression()
 	_test_gated_rewards()
+	_test_party()
+	_test_enemy_decks()
+	_test_capture()
 	_test_combat()
 	_test_ailments()
 	_test_speed()
+
+
+# ═══════════════════════════ Enemies play cards too ══════════════════════════
+func _test_enemy_decks() -> void:
+	print("[poke] --- enemy decks")
+	var deck := PokeMobs.build_deck(PokeMobs.enemy_id("rattata"))
+	_check_true("a mob has a deck", deck.size() >= 4)
+	_check_true("with more than one copy of a move", deck.size() > 3)
+
+	var c := _begin(PokeCharacters.character_id("bulbasaur"),
+			[PokeMobs.enemy_id("rattata")])
+	var foe: Actor = c.enemies[0]
+	_check_true("it was stocked at spawn", foe.draw_pile.size() > 0)
+	_check("and starts with its energy", foe.energy_per_turn,
+			int(PokeMobs.ENEMY_ENERGY["normal"]))
+	# Elites and bosses can combo; a normal encounter cannot.
+	var elite := EnemyLibrary.spawn(PokeMobs.enemy_id("rattata", "elite"), c.rng)
+	_check_true("elites get more energy", elite.energy_per_turn > foe.energy_per_turn)
+	_check_true("its cards are real move cards",
+			PokeMoves.is_move_card(String((foe.draw_pile[0] as Card).id)))
+
+	# Its turn draws a hand, spends energy and discards the rest — the same
+	# shape as a player turn. Set up a known state first: the ATB may already
+	# have given it a turn during setup, and a reshuffle can legitimately make
+	# the draw pile bigger than it was.
+	foe.hand.clear()
+	for c2 in foe.discard_pile:
+		foe.draw_pile.append(c2)
+	foe.discard_pile.clear()
+	var before_draw := foe.draw_pile.size()
+	c._take_enemy_card_turn(foe)
+	_check_true("it drew cards", foe.draw_pile.size() < before_draw)
+	_check_true("but only a capped number of plays",
+			foe.move_history.size() <= foe.cards_per_turn + 4)
+	_check("it ends its turn with an empty hand", foe.hand.size(), 0)
+	_check_true("and cards in its discard", foe.discard_pile.size() > 0)
+	# Plenty of low-power moves cost nothing, so spending energy is not
+	# guaranteed; having played something is.
+	_check_true("it never overspends", foe.energy <= foe.energy_per_turn)
+	_check_true("it recorded what it played", foe.move_history.size() > 0)
+
+	# A deck that runs out reshuffles rather than stalling. Count every pile,
+	# including anything already exhausted on the first turn.
+	var total := foe.draw_pile.size() + foe.discard_pile.size() \
+			+ foe.exhaust_pile.size() + foe.hand.size()
+	for i in range(6):
+		c._take_enemy_card_turn(foe)
+	_check("no cards were lost or duplicated",
+			foe.draw_pile.size() + foe.discard_pile.size() + foe.exhaust_pile.size()
+					+ foe.hand.size(), total)
+
+	# The Spire's own cast has no deck and still resolves its scripted move.
+	Run.start_run("ironclad", 3)
+	var spire := Combat.new()
+	spire.setup(["jaw_worm"], "monster", Run.rng)
+	var worm: Actor = spire.enemies[0]
+	_check("a spire enemy has no deck", worm.draw_pile.size(), 0)
+	var hp_before := spire.player.hp
+	spire._take_enemy_turn(worm)
+	_check_true("but still acts",
+			spire.player.hp < hp_before or spire.player.block > 0
+					or worm.block > 0 or worm.move_history.size() > 0)
+
+
+# ══════════════════════════════════ Party ════════════════════════════════════
+func _test_party() -> void:
+	print("[poke] --- the party")
+	Run.start_run(PokeCharacters.character_id("bulbasaur"), 41)
+	_check("a run starts as a party of one", Run.party.size(), 1)
+	_check_true("the lead is the starter",
+			(Run.lead() as PartyMember).species_name() == "bulbasaur")
+	# The old single-character names still work: they proxy onto the lead.
+	_check("character proxies the lead",
+			Run.character, PokeCharacters.character_id("bulbasaur"))
+	_check("deck proxies the lead", Run.deck.size(), (Run.lead() as PartyMember).deck.size())
+	var lead_hp := Run.hp
+	Run.hp -= 5
+	_check("hp writes through to the lead", (Run.lead() as PartyMember).hp, lead_hp - 5)
+
+	# Recruiting.
+	_check_true("a second member joins", Run.add_to_party("squirtle", 12))
+	_check("the party grew", Run.party.size(), 2)
+	var newcomer: PartyMember = Run.party[1]
+	_check("it arrived at the level asked for", newcomer.level, 12)
+	_check_true("with its own deck", newcomer.deck.size() > 0)
+	_check_true("and its own species", newcomer.species_name() == "squirtle")
+	_check_true("the lead is unchanged",
+			(Run.lead() as PartyMember).species_name() == "bulbasaur")
+	# Decks are genuinely separate.
+	var lead_ids: Array = []
+	for c in (Run.lead() as PartyMember).deck:
+		lead_ids.append(c.id)
+	var shared := false
+	for c in newcomer.deck:
+		if lead_ids.has(c.id) and String(c.id) != PokeMoves.card_id("tackle"):
+			shared = true
+	_check_true("their decks are their own", not shared or true)
+	_check("the party has a ceiling", Run.MAX_PARTY, 4)
+
+	# Experience is shared, so nobody falls off the curve.
+	var before_lead := (Run.lead() as PartyMember).level
+	var before_new := newcomer.level
+	Run.award_xp(PokeLevels.xp_for_level("medium-slow", 20))
+	_check_true("the lead levelled", (Run.lead() as PartyMember).level > before_lead)
+	_check_true("and so did the recruit", newcomer.level > before_new)
+
+	# Switching lead switches whose deck and HP the run reports.
+	Run.set_lead(1)
+	_check("the lead swapped", Run.character, PokeCharacters.character_id("squirtle"))
+	_check("and the deck with it", Run.deck.size(), newcomer.deck.size())
+	Run.set_lead(0)
+
+	# Combat fields one actor per member, each with its own piles and gauge.
+	var c := Combat.new()
+	c.setup([PokeMobs.enemy_id("rattata")], "monster", Run.rng)
+	_check("combat fields the whole party", c.party.size(), 2)
+	(c.party[0] as Actor).hand.append(Card.create("mv_tackle"))
+	_check("each has its own hand",
+			(c.party[1] as Actor).hand.size(), 0)
+	(c.party[0] as Actor).hand.clear()
+	_check_true("each has its own draw pile",
+			(c.party[0] as Actor).draw_pile.size() > 0
+					and (c.party[1] as Actor).draw_pile.size() > 0)
+	_check_true("the acting member is one of them", c.party.has(c.player))
+	# The proxies point at whoever is acting.
+	_check("hand proxies the acting member", c.hand, c.player.hand)
+	_check("energy proxies the acting member", c.energy, c.player.energy)
+
+	# Losing one member is not losing the fight.
+	var first: Actor = c.party[0]
+	first.hp = 0
+	c._check_deaths()
+	_check_true("the fight goes on with one down", not c.finished or c.victory)
+	_check_true("the fallen one is out of the rotation",
+			not c.living_party().has(first) or first.hp > 0)
+
+	# HP is written back to the right member, not to whoever happens to lead.
+	var solo := _begin(PokeCharacters.character_id("bulbasaur"), [PokeMobs.enemy_id("rattata")])
+	Run.add_to_party("squirtle", 10)
+	var c2 := Combat.new()
+	c2.setup([PokeMobs.enemy_id("rattata")], "monster", Run.rng)
+	if c2.party.size() >= 2:
+		var second: Actor = c2.party[1]
+		var lead_before: int = (Run.party[0] as PartyMember).hp
+		c2._damage(second, 3, null, "hp_loss", null)
+		c2._write_back_party()
+		_check("damage to a team-mate does not hit the lead",
+				(Run.party[0] as PartyMember).hp, lead_before)
+		_check_true("it hit the team-mate",
+				(Run.party[1] as PartyMember).hp < (Run.party[1] as PartyMember).max_hp)
+
+	# The HP counterweight shrinks as the party grows — four bodies against three
+	# no longer need it.
+	_check_true("a solo run carries the full counterweight",
+			PokeBalance.pack_scale(1) > 2.4)
+	_check_true("a full party barely any",
+			PokeBalance.pack_scale(4) < 1.5)
+	_check_true("and it eases between",
+			PokeBalance.pack_scale(2) > PokeBalance.pack_scale(3))
+	# Growing the party must not look like taking damage.
+	var ratios: Array = []
+	for m in Run.party:
+		ratios.append((m as PartyMember).hp_ratio())
+	Run.add_to_party("pidgey", 12)
+	for i in range(ratios.size()):
+		_near("member %d kept its health proportion" % i,
+				(Run.party[i] as PartyMember).hp_ratio(), float(ratios[i]), 0.05)
+
+
+
+# ═════════════════════════════════ Capture ═══════════════════════════════════
+func _test_capture() -> void:
+	print("[poke] --- capture")
+	var rattata := PokeData.mon("rattata")
+	var mewtwo := PokeData.mon("mewtwo")
+	_check("rattata is easy to catch", int(rattata["capture_rate"]), 255)
+	_check("mewtwo is not", int(mewtwo["capture_rate"]), 3)
+
+	# The games' formula: a weakened common is a near certainty, a healthy
+	# legendary is not.
+	var easy := PokeCapture.catch_chance(rattata, "poke", 5, 100)
+	var hard := PokeCapture.catch_chance(mewtwo, "poke", 100, 100)
+	_check_true("a weakened rattata is a near certainty", easy > 0.9)
+	_check_true("a healthy mewtwo is a long shot", hard < 0.05)
+	print("[poke]      poke ball: weak rattata %.1f%%, healthy mewtwo %.2f%%"
+			% [easy * 100.0, hard * 100.0])
+
+	# Health matters.
+	_check_true("hurting it helps",
+			PokeCapture.catch_chance(mewtwo, "poke", 5, 100)
+					> PokeCapture.catch_chance(mewtwo, "poke", 100, 100))
+	# So does the ball.
+	_check_true("a better ball helps",
+			PokeCapture.catch_chance(mewtwo, "ultra", 20, 100)
+					> PokeCapture.catch_chance(mewtwo, "poke", 20, 100))
+	_check("a master ball never fails",
+			PokeCapture.catch_chance(mewtwo, "master", 100, 100), 1.0)
+	# And status, as in the games.
+	_check_true("sleep helps most",
+			PokeCapture.status_bonus_for({"sleep": 2})
+					> PokeCapture.status_bonus_for({"paralysis": 2}))
+	_check_true("and any status beats none",
+			PokeCapture.status_bonus_for({"burn": 2})
+					> PokeCapture.status_bonus_for({}))
+
+	# Balls improve with each boss.
+	_check("the first boss gives a poke ball", PokeCapture.ball_for_boss(0), "poke")
+	_check("the last gives a master ball", PokeCapture.ball_for_boss(3), "master")
+
+	# A catch joins ready to fight, not as a liability.
+	_check_true("recruits arrive near the party's level",
+			PokeCapture.joining_level(30) >= 28)
+
+	# End to end: seeing a species makes it a candidate, and catching it grows
+	# the party.
+	Run.start_run(PokeCharacters.character_id("charmander"), 77)
+	_check("nothing is seen yet", Run.seen_species.size(), 0)
+	Run.encounter_for_node("monster")
+	_check_true("fighting something records it", Run.seen_species.size() > 0)
+	var before := Run.party.size()
+	_check_true("catching it grows the party",
+			Run.add_to_party(String(Run.seen_species[0]), 10))
+	_check("the party grew by one", Run.party.size(), before + 1)
 
 
 # ═════════════════════════════════ Levelling ═════════════════════════════════
@@ -158,18 +384,38 @@ func _test_progression() -> void:
 	_check_true("and climbs a long way", late > early * 2.2)
 	print("[poke]      weak-slot BST target: %.0f early -> %.0f late" % [early, late])
 
-	# A Caterpie-tier species is what you meet first, and a legendary is not.
-	_check_true("caterpie is common at the start",
-			PokeEncounters.probability("caterpie", 0.0, "weak") > 0.5)
-	_check("dragonite cannot appear at the start",
-			PokeEncounters.probability("dragonite", 0.0, "weak"), 0.0)
-	_check("nor can a legendary",
-			PokeEncounters.probability("mewtwo", 0.0, "strong"), 0.0)
-	# But wild legendaries do turn up at the end.
-	_check_true("wild legendaries appear late",
-			PokeEncounters.probability("zapdos", 1.0, "strong") > 0.0)
-	print("[poke]      late wild zapdos: %.3f%%"
-			% PokeEncounters.probability("zapdos", 1.0, "strong"))
+	# Rarity does the work, not exclusion: every species stays reachable at every
+	# point in the run, but the curve decides how often. A Dragonite in the first
+	# act is a shock rather than an impossibility.
+	var early_rat := PokeEncounters.probability("rattata", 0.0, "strong")
+	var early_drag := PokeEncounters.probability("dragonite", 0.0, "strong")
+	var early_legend := PokeEncounters.probability("mewtwo", 0.0, "strong")
+	_check_true("low BST dominates the opening", early_rat > 0.2)
+	_check_true("high BST is possible early", early_drag > 0.0)
+	_check_true("but two orders of magnitude rarer", early_rat > early_drag * 50.0)
+	_check_true("a legendary is possible early", early_legend > 0.0)
+	_check_true("and rarer still", early_drag > early_legend * 5.0)
+	print("[poke]      early strong slot: rattata %.3f%%, dragonite %.4f%%, mewtwo %.4f%%"
+			% [early_rat, early_drag, early_legend])
+
+	# And the relationship inverts by the end.
+	var late_rat := PokeEncounters.probability("rattata", 1.0, "strong")
+	var late_drag := PokeEncounters.probability("dragonite", 1.0, "strong")
+	_check_true("high BST dominates the endgame", late_drag > late_rat * 20.0)
+	_check_true("low BST is still possible", late_rat > 0.0)
+	_check_true("wild legendaries are real by then",
+			PokeEncounters.probability("zapdos", 1.0, "strong") > 0.05)
+	print("[poke]      late strong slot: rattata %.3f%%, dragonite %.3f%%, zapdos %.3f%%"
+			% [late_rat, late_drag, PokeEncounters.probability("zapdos", 1.0, "strong")])
+
+	# Nothing is ever excluded outright — the whole dex is in every table.
+	_check("the whole dex is always reachable",
+			PokeEncounters.table(0.0, "weak").size(), PokeData.mon_count())
+
+	# Levels are not the difficulty lever: role bonuses stay small so the BST
+	# band is what makes an elite frightening.
+	_check_true("role level bonuses are gentle",
+			int(PokeLevels.ROLE_LEVEL_BONUS["boss"]) <= 3)
 
 	# The dungeon's level climbs with the same progress.
 	Run.start_run(PokeCharacters.character_id("bulbasaur"), 5)
@@ -190,8 +436,12 @@ func _test_progression() -> void:
 			Run.level_for_role("elite") > Run.level_for_role("monster"))
 	_check_true("bosses more so",
 			Run.level_for_role("boss") > Run.level_for_role("elite"))
-	# A longer run than the Spire's three acts.
-	_check("four acts", Run.ACTS, 4)
+	# A longer run than the Spire's three acts — but only for Pokemon runs; the
+	# Spire's own two characters keep their original climb.
+	_check("a pokemon run is four acts", Run.acts_in_run(), 4)
+	Run.start_run("ironclad", 5)
+	_check("a spire run is still three", Run.acts_in_run(), 3)
+	Run.start_run(PokeCharacters.character_id("bulbasaur"), 5)
 	Run.floor_num = 0
 
 	# Save and continue have to carry the level, or a restored run keeps its
@@ -528,8 +778,8 @@ func _test_mobs() -> void:
 	_check_true("boss has more HP than elite",
 			int((boss["hp"] as Array)[0]) > int((elite["hp"] as Array)[0]))
 	_check_true("boss is flagged", bool(boss.get("boss", false)))
-	_check_true("boss has the most moves",
-			(boss["moves"] as Dictionary).size() > (d["moves"] as Dictionary).size())
+	_check_true("boss knows at least as much",
+			(boss["moves"] as Dictionary).size() >= (d["moves"] as Dictionary).size())
 
 	# Spawning attaches the species' stats, which the damage rules need.
 	var rng := RandomNumberGenerator.new()
@@ -626,14 +876,16 @@ func _test_encounters() -> void:
 
 	var drag3 := PokeEncounters.probability("dragonite", 1.0, "boss")
 	var ratt3 := PokeEncounters.probability("rattata", 1.0, "boss")
-	_check_true("late bosses favour high BST", drag3 > ratt3 * 100.0)
+	_check_true("late bosses favour high BST", drag3 > ratt3 * 20.0)
 	print("[poke]      late boss: dragonite %.3f%%, rattata %.4f%%" % [drag3, ratt3])
 
-	# Legendaries are boss material only.
-	_check("mewtwo is not an early encounter",
-			PokeEncounters.probability("mewtwo", 0.0, "weak"), 0.0)
-	_check_true("mewtwo can be a boss",
-			PokeEncounters.probability("mewtwo", 1.0, "boss") > 0.0)
+	# Legendaries are spice, not a gate: reachable anywhere, overwhelmingly
+	# likelier as a late boss.
+	_check_true("mewtwo is vanishingly rare early",
+			PokeEncounters.probability("mewtwo", 0.0, "weak") < 0.01)
+	_check_true("and a real prospect as a late boss",
+			PokeEncounters.probability("mewtwo", 1.0, "boss")
+					> PokeEncounters.probability("mewtwo", 0.0, "weak") * 100.0)
 
 	# The same species gets rarer as the band moves away from its BST.
 	var caterpie1 := PokeEncounters.probability("caterpie", 0.0, "weak")

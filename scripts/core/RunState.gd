@@ -11,13 +11,92 @@ signal deck_changed
 const POTION_SLOTS := 3
 const SAVE_PATH := "user://spire_save.json"
 
-var character: String = "ironclad"
-var deck: Array = []                  ## Array[Card]
+## ── The party ───────────────────────────────────────────────────────────────
+## The player's side is a list of members. `character`, `deck`, `hp`, `max_hp`,
+## `player_level` and `player_xp` below are proxies onto the *lead* member, so
+## the rest of the game — rewards, shops, events, the card picker — carries on
+## addressing "the player" without knowing there is a party behind it.
+##
+## A Spire run (Ironclad, Silent) has no party at all and uses the plain fields.
+var party: Array = []                 ## Array[PartyMember]
+var lead_index: int = 0
+const MAX_PARTY := 4
+
 var relics: Array = []                ## Array[String]
 var potions: Array = []               ## Array[String], "" for an empty slot
 var gold: int = 99
-var hp: int = 80
-var max_hp: int = 80
+
+## Backing values for the Spire's two characters, which have no party.
+var _solo_character: String = "ironclad"
+var _solo_deck: Array = []
+var _solo_hp: int = 80
+var _solo_max_hp: int = 80
+var _solo_level: int = PokeLevels.START_LEVEL
+var _solo_xp: int = 0
+
+
+func lead() -> PartyMember:
+	if party.is_empty():
+		return null
+	return party[clampi(lead_index, 0, party.size() - 1)]
+
+
+## Members still standing, in party order.
+func living_party() -> Array:
+	var out: Array = []
+	for m in party:
+		if (m as PartyMember).is_alive():
+			out.append(m)
+	return out
+
+
+func has_party() -> bool:
+	return not party.is_empty()
+
+
+var character: String:
+	get:
+		var m := lead()
+		return m.character_id if m != null else _solo_character
+	set(value):
+		var m := lead()
+		if m != null:
+			m.character_id = value
+		else:
+			_solo_character = value
+
+var deck: Array:
+	get:
+		var m := lead()
+		return m.deck if m != null else _solo_deck
+	set(value):
+		var m := lead()
+		if m != null:
+			m.deck = value
+		else:
+			_solo_deck = value
+
+var hp: int:
+	get:
+		var m := lead()
+		return m.hp if m != null else _solo_hp
+	set(value):
+		var m := lead()
+		if m != null:
+			m.hp = value
+		else:
+			_solo_hp = value
+
+var max_hp: int:
+	get:
+		var m := lead()
+		return m.max_hp if m != null else _solo_max_hp
+	set(value):
+		var m := lead()
+		if m != null:
+			m.max_hp = value
+		else:
+			_solo_max_hp = value
 var act: int = 1
 var floor_num: int = 0
 var ascension: int = 0
@@ -43,18 +122,46 @@ var run_active: bool = false
 var run_score: int = 0
 
 ## ── Levelling ──────────────────────────────────────────────────────────────
-## A longer, more enriching run: four acts rather than three, so there is room
-## for a party to level through two or three evolutions before it ends.
-const ACTS := 4
+## A Pokemon run is four acts rather than three, so there is room for a party to
+## level through two or three evolutions before it ends. The Spire's own two
+## characters keep their original three-act climb.
+const ACTS := 3
+const POKEMON_ACTS := 4
 
 ## The level the dungeon fields on the final floor. The party is expected to
 ## arrive somewhere near it, having evolved once or twice on the way.
 const DUNGEON_END_LEVEL := 55
 
-var player_level: int = PokeLevels.START_LEVEL
-var player_xp: int = 0
+var player_level: int:
+	get:
+		var m := lead()
+		return m.level if m != null else _solo_level
+	set(value):
+		var m := lead()
+		if m != null:
+			m.level = value
+		else:
+			_solo_level = value
+
+var player_xp: int:
+	get:
+		var m := lead()
+		return m.xp if m != null else _solo_xp
+	set(value):
+		var m := lead()
+		if m != null:
+			m.xp = value
+		else:
+			_solo_xp = value
 var pending_evolution: Dictionary = {}   ## branch offered but not yet answered
 var last_encounter_role: String = "monster"
+
+## Species the player has actually met. A ball can only be thrown at something
+## you have seen — catching out of a catalogue you have never fought would make
+## the choice arbitrary.
+var seen_species: Array = []
+## Balls in hand, awarded one per boss.
+var balls: Array = []
 
 
 func _ready() -> void:
@@ -69,24 +176,35 @@ func start_run(char_id: String, run_seed: int = 0, asc: int = 0) -> void:
 	rng.seed = seed_value
 	ascension = asc
 
-	player_level = PokeLevels.START_LEVEL
-	player_xp = PokeLevels.xp_for_level(
-			String(PokeCharacters.mon_for(char_id).get("growth", "medium")),
-			PokeLevels.START_LEVEL)
 	pending_evolution = {}
+	party.clear()
+	lead_index = 0
+	seen_species.clear()
+	balls.clear()
 
 	var cdef: Dictionary = CardLibrary.character(char_id)
-	max_hp = int(cdef["max_hp"])
-	if ascension >= 1:
-		max_hp -= 5
-	hp = max_hp
+	if PokeCharacters.is_pokemon_character(char_id):
+		# A Pokemon run starts as a party of one and grows by capture.
+		party.append(PartyMember.create(char_id, PokeLevels.START_LEVEL, 1))
+		(party[0] as PartyMember).party_size_hint = 1
+		if ascension >= 1:
+			lead().max_hp -= 5
+			lead().hp = lead().max_hp
+	else:
+		_solo_character = char_id
+		_solo_level = PokeLevels.START_LEVEL
+		_solo_xp = 0
+		_solo_deck = []
+		_solo_max_hp = int(cdef["max_hp"])
+		if ascension >= 1:
+			_solo_max_hp -= 5
+		_solo_hp = _solo_max_hp
 	gold = 99
 	act = 1
 	floor_num = 0
 	elites_slain = 0
 	bosses_slain = 0
 	run_score = 0
-	deck.clear()
 	relics.clear()
 	potions = ["", "", ""]
 	visited_nodes.clear()
@@ -98,8 +216,10 @@ func start_run(char_id: String, run_seed: int = 0, asc: int = 0) -> void:
 	card_uncommon_chance = 0.37
 	pending_boss_relic = false
 
-	for id in CardLibrary.starter_deck(char_id):
-		deck.append(Card.create(id))
+	# A party member arrives with its own starter deck already built.
+	if not has_party():
+		for id in CardLibrary.starter_deck(char_id):
+			deck.append(Card.create(id))
 	add_relic(String(cdef["relic"]))
 	if ascension >= 10:
 		deck.append(Card.create("ascenders_bane"))
@@ -297,57 +417,93 @@ func level_progress() -> float:
 	return PokeLevels.level_progress(growth_rate(), player_xp)
 
 
-## Grants experience and applies any level-ups. Returns how many levels were
-## gained, so the reward screen can say so.
+## Grants experience to the whole party and applies any level-ups.
+##
+## Everyone still standing gets the full amount, Exp-Share style, rather than
+## only whoever landed the blow. A party that levels unevenly stops being a party
+## — the back two would fall behind the curve and never catch up.
+##
+## Returns the number of levels the lead gained, which is what the reward screen
+## reports.
 func award_xp(amount: int) -> int:
-	if not is_pokemon_run() or amount <= 0:
+	if amount <= 0:
 		return 0
-	player_xp += amount
-	var was := player_level
-	player_level = PokeLevels.level_for_xp(growth_rate(), player_xp)
-	if player_level <= was:
+	if not has_party():
+		if not is_pokemon_run():
+			return 0
+		_solo_xp += amount
 		return 0
-	_apply_level(was)
-	return player_level - was
-
-
-## Levelling raises Max HP by the difference the formula gives, and heals by the
-## same amount — you do not gain a level and stay hurt.
-func _apply_level(previous_level: int) -> void:
-	var mon := player_mon()
-	if mon.is_empty():
-		return
-	var before := PokeBalance.player_hp(mon, previous_level)
-	var after := PokeBalance.player_hp(mon, player_level)
-	var gain: int = max(0, after - before)
-	max_hp = after
-	hp = min(max_hp, hp + gain)
+	var lead_gain := 0
+	for m in living_party():
+		var member: PartyMember = m
+		var gained := member.award_xp(amount)
+		if member == lead():
+			lead_gain = gained
 	hp_changed.emit(hp, max_hp)
-	levelled_up.emit(player_level)
-	var branches := PokeEvolution.available(String(mon["name"]), player_level)
-	if not branches.is_empty():
-		evolution_available.emit(branches)
+	if lead_gain > 0:
+		levelled_up.emit(player_level)
+	return lead_gain
+
+
+## Every member with an evolution waiting, as [{member, branches}].
+func pending_evolutions() -> Array:
+	var out: Array = []
+	for m in party:
+		var member: PartyMember = m
+		if not member.is_alive():
+			continue
+		var branches := member.evolutions()
+		if not branches.is_empty():
+			out.append({"member": member, "branches": branches})
+	return out
 
 
 ## Swaps the run's species for one it evolves into. The deck comes along
 ## untouched — they are moves, and the evolved form knows them — but the stat
 ## line, typing and future card pool are the new species'.
-func evolve_into(species_name: String) -> bool:
-	if not is_pokemon_run():
+## Evolves a specific member, or the lead if none is given.
+func evolve_member(member: PartyMember, species_name: String) -> bool:
+	if member == null or not member.evolve_into(species_name):
 		return false
-	var mon := PokeData.mon(species_name)
-	if mon.is_empty():
-		return false
-	var ratio := float(hp) / float(max(1, max_hp))
-	character = PokeCharacters.character_id(species_name)
-	max_hp = PokeBalance.player_hp(mon, player_level)
-	# Evolving is a reward, so it heals as well as growing the pool.
-	hp = clampi(int(round(max_hp * maxf(ratio, 0.5))), 1, max_hp)
 	pending_evolution = {}
-	PokeCharacters.forget(character)
 	hp_changed.emit(hp, max_hp)
 	deck_changed.emit()
 	return true
+
+
+func evolve_into(species_name: String) -> bool:
+	return evolve_member(lead(), species_name)
+
+
+# ──────────────────────────────── Recruiting ──────────────────────────────────
+## Adds a caught Pokemon to the party. Returns false when there is no room.
+func add_to_party(species: String, at_level: int) -> bool:
+	if party.size() >= MAX_PARTY:
+		return false
+	var member := PartyMember.create(PokeCharacters.character_id(species), at_level,
+			party.size() + 1)
+	member.caught = true
+	party.append(member)
+	_resize_party()
+	deck_changed.emit()
+	return true
+
+
+## The HP counterweight depends on how many of you there are, so everyone
+## restats when the party changes size. Proportions are preserved, so nobody
+## looks like they took damage for gaining a team-mate.
+func _resize_party() -> void:
+	for m in party:
+		var member: PartyMember = m
+		member.party_size_hint = party.size()
+		member.restat(false, party.size())
+	hp_changed.emit(hp, max_hp)
+
+
+func set_lead(index: int) -> void:
+	lead_index = clampi(index, 0, max(0, party.size() - 1))
+	deck_changed.emit()
+	hp_changed.emit(hp, max_hp)
 
 
 ## Rarity-weighted card ids for a combat reward.
@@ -441,8 +597,13 @@ func enter_node(idx: int) -> void:
 ## How far through the whole run this is, 0 at the first floor and 1 at the
 ## last. Drives the opponent BST cap and the level the dungeon fields, so both
 ## stretch automatically if the run gets longer or shorter.
+## How many acts this run climbs. Pokemon runs are longer.
+func acts_in_run() -> int:
+	return POKEMON_ACTS if is_pokemon_run() else ACTS
+
+
 func total_floors() -> int:
-	return ACTS * (MapGen.ROWS + 1)
+	return acts_in_run() * (MapGen.ROWS + 1)
 
 
 func progress() -> float:
@@ -478,7 +639,7 @@ func at_boss() -> bool:
 func advance_act() -> bool:
 	bosses_slain += 1
 	run_score += 100 * act
-	if act >= ACTS:
+	if act >= acts_in_run():
 		return false
 	new_act(act + 1)
 	return true
@@ -495,6 +656,10 @@ func encounter_for_node(node_type: String) -> Array:
 		var early := visited_nodes.size() <= 3 and act == 1
 		group = EncounterLibrary.pick(act, "weak" if early else "strong", rng, recent_encounters)
 	last_encounter_role = node_type
+	for id in group:
+		var mon := PokeMobs.mon_for(String(id))
+		if not mon.is_empty() and not seen_species.has(String(mon["name"])):
+			seen_species.append(String(mon["name"]))
 	recent_encounters.append(",".join(group))
 	if recent_encounters.size() > 3:
 		recent_encounters.pop_front()
@@ -811,7 +976,12 @@ func save_run() -> void:
 	var cards: Array = []
 	for c in deck:
 		cards.append({"id": c.id, "up": c.upgrade_count})
+	var members: Array = []
+	for m in party:
+		members.append((m as PartyMember).to_dict())
 	var data := {
+		"party": members, "lead": lead_index,
+		"seen": seen_species, "balls": balls,
 		"character": character, "gold": gold, "hp": hp, "max_hp": max_hp,
 		"act": act, "floor": floor_num, "seed": seed_value, "ascension": ascension,
 		"deck": cards, "relics": relics, "potions": potions,
@@ -859,6 +1029,17 @@ func load_run() -> bool:
 	card_rare_chance = float(d.get("rare_chance", 0.03))
 	shop_removals = int(d.get("shop_removals", 0))
 	event_pool_used = (d.get("events_used", []) as Array).duplicate()
+	# The party has to be rebuilt before anything touches the proxies, since
+	# character/deck/hp all read through the lead member.
+	seen_species = (d.get("seen", []) as Array).duplicate()
+	balls = (d.get("balls", []) as Array).duplicate()
+	party.clear()
+	lead_index = int(d.get("lead", 0))
+	for entry in d.get("party", []):
+		party.append(PartyMember.from_dict(entry))
+	for m in party:
+		(m as PartyMember).party_size_hint = party.size()
+	lead_index = clampi(lead_index, 0, max(0, party.size() - 1))
 	player_level = int(d.get("player_level", PokeLevels.START_LEVEL))
 	player_xp = int(d.get("player_xp", 0))
 	last_encounter_role = String(d.get("encounter_role", "monster"))
@@ -869,12 +1050,15 @@ func load_run() -> bool:
 	rng = RandomNumberGenerator.new()
 	rng.seed = seed_value
 	rng.state = randi()
-	deck.clear()
-	for entry in d.get("deck", []):
-		var c := Card.create(String(entry["id"]))
-		c.upgrade_count = int(entry["up"])
-		c.upgraded = c.upgrade_count > 0
-		deck.append(c)
+	# A party run restored its decks member by member above; the flat "deck" key
+	# is only for the Spire's two, and rewriting it would clobber the lead's.
+	if not has_party():
+		deck.clear()
+		for entry in d.get("deck", []):
+			var c := Card.create(String(entry["id"]))
+			c.upgrade_count = int(entry["up"])
+			c.upgraded = c.upgrade_count > 0
+			deck.append(c)
 	relics = (d.get("relics", []) as Array).duplicate()
 	potions = (d.get("potions", ["", "", ""]) as Array).duplicate()
 	# JSON turns the map's integer arrays into floats; rebuild them as ints.

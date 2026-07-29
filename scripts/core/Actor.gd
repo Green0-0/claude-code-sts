@@ -20,6 +20,26 @@ var poke_stats: Dictionary = {}    ## hp/atk/df/spa/spd/spe *base* stats
 var poke_types: Array = []         ## e.g. ["water", "flying"]
 var level: int = PokeLevels.START_LEVEL
 
+## ── Party members ───────────────────────────────────────────────────────────
+## Each member of the player's side carries its own deck, its own piles and its
+## own energy. Combat proxies the un-prefixed names (hand, draw_pile, energy …)
+## through to whichever member is currently acting, so the hundred-odd places
+## that already say `hand` keep working and simply mean "the active member's".
+var character_id: String = ""      ## "pkc_pikachu"; empty for enemies
+var slot_index: int = 0            ## position in the party, 0 is the lead
+
+var hand: Array = []
+var draw_pile: Array = []
+var discard_pile: Array = []
+var exhaust_pile: Array = []
+var energy: int = 0
+var energy_per_turn: int = 3
+var base_draw: int = 5
+## How many cards this actor may play in one turn. Only enemies are capped; the
+## player is bounded by energy alone.
+var cards_per_turn: int = 99
+
+
 ## ── Active Time Battle ──────────────────────────────────────────────────────
 ## Charge fills at a rate set by Speed; at Combat.CHARGE_FULL this actor acts.
 ## Turn order is therefore emergent rather than a fixed player/enemy alternation:

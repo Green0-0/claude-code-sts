@@ -12,19 +12,44 @@ signal enemy_died(who: Actor)
 signal player_turn_started
 signal combat_finished(victory: bool)
 signal card_flew(card: Card, from_pile: String, to_pile: String)
+## Raised when the ATB hands control to a different party member, so the UI can
+## bring that member's hand to the front.
+signal active_member_changed(who: Actor)
 
 const HAND_LIMIT := 10
 
+## The player's side. `player` always points at whichever member is currently
+## acting; the piles and energy below proxy through to it, so every rule that
+## already said `hand` or `energy` now means "the acting member's" without
+## needing to be rewritten.
+var party: Array = []                  ## Array[Actor]
 var player: Actor = null
 var enemies: Array = []                ## Array[Actor]
-var draw_pile: Array = []              ## Array[Card]
-var hand: Array = []
-var discard_pile: Array = []
-var exhaust_pile: Array = []
 
-var energy: int = 0
-var energy_per_turn: int = 3
-var base_draw: int = 5
+var draw_pile: Array:
+	get: return player.draw_pile if player != null else []
+var hand: Array:
+	get: return player.hand if player != null else []
+var discard_pile: Array:
+	get: return player.discard_pile if player != null else []
+var exhaust_pile: Array:
+	get: return player.exhaust_pile if player != null else []
+
+var energy: int:
+	get: return player.energy if player != null else 0
+	set(value):
+		if player != null:
+			player.energy = value
+var energy_per_turn: int:
+	get: return player.energy_per_turn if player != null else 3
+	set(value):
+		if player != null:
+			player.energy_per_turn = value
+var base_draw: int:
+	get: return player.base_draw if player != null else 5
+	set(value):
+		if player != null:
+			player.base_draw = value
 var turn: int = 0
 var phase: String = "start"            ## start | player | enemy | done
 var rng := RandomNumberGenerator.new()
@@ -47,6 +72,9 @@ var lost_hp_this_combat: bool = false
 var preview_target_index: int = -1
 var potions_used: int = 0
 var xp_pool: int = 0                   ## experience banked from everything felled
+## Which team-mate an ally-aimed card is pointed at, set by the UI just before
+## the card is played.
+var ally_target: Actor = null
 
 var pending_choice: Dictionary = {}
 var _queue: Array = []
@@ -61,23 +89,13 @@ var _player_has_acted: bool = false
 func setup(enemy_ids: Array, node_type: String, run_rng: RandomNumberGenerator) -> void:
 	room_type = node_type
 	rng = run_rng
-	player = Actor.make_player(String(CardLibrary.character(Run.character)["name"]),
-			Run.hp, Run.max_hp)
+	_build_party()
 	var slot := 0
 	for id in enemy_ids:
 		var e := EnemyLibrary.spawn(id, rng, Run.ascension)
 		e.slot = slot
 		slot += 1
 		enemies.append(e)
-	for c in Run.deck:
-		var inst: Card = c
-		inst.cost_override = -99
-		inst.free_this_turn = false
-		inst.bonus_damage = 0
-		inst.in_combat_upgrade = false
-		draw_pile.append(inst)
-	_shuffle(draw_pile)
-	_apply_poke_player_stats()
 	_apply_combat_start_relics()
 	for e in enemies:
 		_pick_intent(e)
@@ -92,18 +110,61 @@ func setup(enemy_ids: Array, node_type: String, run_rng: RandomNumberGenerator) 
 		return
 
 
-## A player Pokemon fights with its own species' numbers: base stats and types
-## for the damage formula, and Speed for how much it gets done each turn.
-func _apply_poke_player_stats() -> void:
-	var mon := Run.player_mon()
-	if mon.is_empty():
-		return
-	player.poke_name = String(mon["name"])
-	player.poke_stats = mon["stats"]
-	player.poke_types = mon["types"]
-	player.level = Run.player_level
-	energy_per_turn = PokeBalance.energy_for(mon)
-	base_draw = PokeBalance.draw_for(mon)
+## Builds one Actor per party member, each with its own shuffled deck, and
+## points `player` at the lead until a gauge decides otherwise.
+func _build_party() -> void:
+	party.clear()
+	if Run.has_party():
+		for i in range(Run.party.size()):
+			var member: PartyMember = Run.party[i]
+			if not member.is_alive():
+				continue
+			party.append(_make_member_actor(member, i))
+	if party.is_empty():
+		# The Spire's two characters, or a wiped party: one actor, the old way.
+		var solo := Actor.make_player(
+				String(CardLibrary.character(Run.character)["name"]), Run.hp, Run.max_hp)
+		solo.character_id = Run.character
+		_stock_deck(solo, Run.deck)
+		party.append(solo)
+	player = party[0]
+
+
+func _make_member_actor(member: PartyMember, index: int) -> Actor:
+	var a := Actor.make_player(member.display_name(), member.hp, member.max_hp)
+	a.character_id = member.character_id
+	a.slot_index = index
+	var mon := member.mon()
+	if not mon.is_empty():
+		a.poke_name = String(mon["name"])
+		a.poke_stats = mon["stats"]
+		a.poke_types = mon["types"]
+		a.level = member.level
+		a.energy_per_turn = PokeBalance.energy_for(mon)
+		a.base_draw = PokeBalance.draw_for(mon)
+		a.name = "%s Lv%d" % [member.display_name(), member.level]
+	_stock_deck(a, member.deck)
+	return a
+
+
+func _stock_deck(a: Actor, cards: Array) -> void:
+	for c in cards:
+		var inst: Card = c
+		inst.cost_override = -99
+		inst.free_this_turn = false
+		inst.bonus_damage = 0
+		inst.in_combat_upgrade = false
+		a.draw_pile.append(inst)
+	_shuffle(a.draw_pile)
+
+
+## Party members still standing.
+func living_party() -> Array:
+	var out: Array = []
+	for a in party:
+		if (a as Actor).alive and not (a as Actor).is_dead():
+			out.append(a)
+	return out
 
 
 ## Starting gauges. Everyone begins partly charged, spread by Speed, so the
@@ -437,8 +498,7 @@ func _advance_time() -> Actor:
 ## Everything still standing, player side included.
 func _all_combatants() -> Array:
 	var out: Array = []
-	if player != null and not player.is_dead():
-		out.append(player)
+	out.append_array(living_party())
 	out.append_array(living_enemies())
 	return out
 
@@ -495,6 +555,11 @@ func step_enemy() -> bool:
 		return false
 	active = next
 	if next.is_player:
+		# Control passes to whichever member charged, not always the lead — that
+		# is the whole point of giving each of them their own gauge.
+		if player != next:
+			player = next
+			active_member_changed.emit(next)
 		phase = "player"
 		_start_player_turn()
 		return false
@@ -546,7 +611,10 @@ func _take_enemy_turn(e: Actor) -> void:
 	var stopped := incapacitated_reason(e)
 	if stopped != "":
 		_say(stopped)
+	elif e.draw_pile.size() + e.hand.size() + e.discard_pile.size() > 0:
+		_take_enemy_card_turn(e)
 	else:
+		# The Spire's own cast has no deck; they resolve one scripted move.
 		var move_name: String = String(e.intent.get("name", ""))
 		if move_name == "":
 			_pick_intent(e)
@@ -565,6 +633,103 @@ func _take_enemy_turn(e: Actor) -> void:
 	_check_deaths()
 	if not e.is_dead():
 		_pick_intent(e)
+
+
+## An enemy Pokemon's turn, played by the same rules the player uses: refill
+## energy, draw back up to a hand, then spend that energy on cards until nothing
+## affordable is left.
+func _take_enemy_card_turn(e: Actor) -> void:
+	e.energy = e.energy_per_turn
+	_enemy_draw(e, max(0, e.base_draw - e.hand.size()))
+
+	var played := 0
+	while played < e.cards_per_turn:
+		var card := _enemy_best_card(e)
+		if card == null:
+			break
+		_enemy_play_card(e, card)
+		played += 1
+		if finished or e.is_dead():
+			return
+
+	# Whatever is left is discarded, exactly as the player's hand is.
+	var leftovers: Array = e.hand.duplicate()
+	for c in leftovers:
+		e.hand.erase(c)
+		e.discard_pile.append(c)
+
+
+## The best card in an enemy's hand it can currently afford, or null.
+func _enemy_best_card(e: Actor) -> Card:
+	var best: Card = null
+	var best_score := 0.0
+	for c in e.hand:
+		var card: Card = c
+		if card.is_unplayable():
+			continue
+		var cost := card.base_cost()
+		if cost < 0 or cost > e.energy:
+			continue
+		var score := _enemy_card_score(e, card)
+		if best == null or score > best_score:
+			best = card
+			best_score = score
+	return best
+
+
+## Reuses the mob AI's judgement, expressed over a card rather than a move.
+##
+## The anti-repeat and jitter matter as much as the raw score. Without them an
+## enemy simply plays its single best attack every turn forever, which is both
+## more damaging and far more monotonous than the scripted AI it replaced — it
+## never reaches for a Growl or a Harden the way a real one does.
+func _enemy_card_score(e: Actor, card: Card) -> float:
+	var d := card.def()
+	var poke: Dictionary = d.get("poke", {})
+	var shape := {
+		"power": int(card.raw_params().get("pw", 0)),
+		"class": String(poke.get("class", "physical")),
+		"mtype": String(poke.get("type", "normal")),
+		"effects": card.effects(),
+	}
+	var score := PokeMobs._score(e, shape, player, self)
+	var name := card.display_name()
+	if EnemyLibrary._repeated(e, name, 2):
+		score *= 0.35
+	elif EnemyLibrary._last(e) == name:
+		score *= 0.8
+	return score * (1.0 + rng.randf() * 0.25)
+
+
+func _enemy_play_card(e: Actor, card: Card) -> void:
+	e.hand.erase(card)
+	e.energy = max(0, e.energy - max(0, card.base_cost()))
+	e.move_history.append(card.display_name())
+	_say("%s plays %s." % [e.name, card.display_name()])
+	card_flew.emit(card, "hand", "play")
+	var ctx := {"owner": e, "target": player, "params": card.raw_params(),
+			"source_card": card}
+	_push_effects(card.effects(), ctx)
+	_run_queue()
+	# One-shot moves burn out; everything else cycles.
+	if card.has_flag("exhaust"):
+		e.exhaust_pile.append(card)
+	else:
+		e.discard_pile.append(card)
+
+
+func _enemy_draw(e: Actor, count: int) -> void:
+	for i in range(count):
+		if e.draw_pile.is_empty():
+			if e.discard_pile.is_empty():
+				return
+			for c in e.discard_pile:
+				e.draw_pile.append(c)
+			e.discard_pile.clear()
+			_shuffle(e.draw_pile)
+		if e.draw_pile.is_empty():
+			return
+		e.hand.append(e.draw_pile.pop_back())
 
 
 func _pick_intent(e: Actor) -> void:
@@ -678,7 +843,7 @@ func play_card(c: Card, target_index: int = -1) -> bool:
 
 	var params := _params_for_play(c)
 	var ctx := {"owner": player, "target": target, "params": params,
-			"source_card": c, "x": x_value}
+			"source_card": c, "x": x_value, "ally_target": ally_target}
 
 	var repeats := 1
 	if is_attack and player.has_status("double_tap"):
@@ -859,6 +1024,14 @@ func _targets_for(eff: Dictionary, ctx: Dictionary) -> Array:
 		"self": return [player]
 		"all": return living_enemies()
 		"player": return [player]
+		# A card aimed at your own side. As in the games, anything can be pointed
+		# at a team-mate: a heal, a screen, or a Helping Hand.
+		"ally":
+			var chosen = ctx.get("ally_target", null)
+			if chosen != null and (chosen as Actor).alive and not (chosen as Actor).is_dead():
+				return [chosen]
+			return [player]
+		"party": return living_party()
 		"random":
 			var l := living_enemies()
 			if l.is_empty():
@@ -2025,7 +2198,7 @@ func _damage(target: Actor, amount: int, source: Actor, kind: String, card: Card
 		if thorns > 0:
 			_damage(source, thorns, target, "thorns", null)
 	if target.is_player:
-		Run.hp = player.hp
+		_sync_member(target)
 	return remaining
 
 
@@ -2038,7 +2211,7 @@ func _lose_hp(who: Actor, amount: int, reason: String) -> void:
 		if player.has_status("rupture") and reason != "Poison" and reason != "Burn":
 			player.add_signed_status("strength", player.get_status("rupture"))
 		_on_player_hp_loss(amount, false)
-		Run.hp = player.hp
+		_sync_member(who)
 	if reason != "":
 		_say("%s loses %d HP (%s)." % [who.name, amount, reason])
 	changed.emit()
@@ -2064,7 +2237,7 @@ func _heal(who: Actor, amount: int) -> void:
 	if who.hp > before:
 		floating.emit(who, "+%d" % (who.hp - before), "heal")
 	if who.is_player:
-		Run.hp = player.hp
+		_sync_member(who)
 		Run.hp_changed.emit(Run.hp, Run.max_hp)
 	changed.emit()
 
@@ -2094,7 +2267,7 @@ func _tick_poison(who: Actor) -> void:
 	floating.emit(who, "-%d Poison" % p, "poison")
 	who.set_status("poison", p - 1)
 	if who.is_player:
-		Run.hp = player.hp
+		_sync_member(who)
 	changed.emit()
 
 
@@ -2160,11 +2333,11 @@ func _on_enemy_death(e: Actor) -> void:
 func _check_end() -> bool:
 	if finished:
 		return true
-	if player.hp <= 0:
+	if living_party().is_empty():
 		finished = true
 		victory = false
 		phase = "done"
-		Run.hp = 0
+		_write_back_party()
 		combat_finished.emit(false)
 		return true
 	if living_enemies().is_empty():
@@ -2177,6 +2350,35 @@ func _check_end() -> bool:
 	return false
 
 
+## Writes one actor's HP back to the party member it stands for. The acting
+## member is rarely the lead, so writing to Run.hp directly would put whoever is
+## swinging right now onto the lead's health bar.
+func _sync_member(who: Actor) -> void:
+	if who == null or not who.is_player:
+		return
+	if not Run.has_party():
+		Run.hp = who.hp
+		return
+	if who.slot_index >= 0 and who.slot_index < Run.party.size():
+		(Run.party[who.slot_index] as PartyMember).hp = max(0, who.hp)
+
+
+## Copies each member's HP back onto the run. Combat works on Actors; the party
+## between fights is PartyMembers, and this is the one place they meet.
+func _write_back_party() -> void:
+	if not Run.has_party():
+		if player != null:
+			Run.hp = player.hp
+		return
+	for a in party:
+		var actor: Actor = a
+		if actor.slot_index < 0 or actor.slot_index >= Run.party.size():
+			continue
+		var member: PartyMember = Run.party[actor.slot_index]
+		member.hp = max(0, actor.hp)
+	Run.hp_changed.emit(Run.hp, Run.max_hp)
+
+
 func _on_victory() -> void:
 	if Run.has_relic("black_blood"):
 		_heal(player, 12)
@@ -2184,8 +2386,7 @@ func _on_victory() -> void:
 		_heal(player, 6)
 	if Run.has_relic("meat_on_the_bone") and player.hp_ratio() < 0.5:
 		_heal(player, 12)
-	Run.hp = player.hp
-	Run.hp_changed.emit(Run.hp, Run.max_hp)
+	_write_back_party()
 	# Reset per-combat card state so the deck is clean next fight.
 	var everything: Array = _all_cards()
 	everything.append_array(exhaust_pile)
