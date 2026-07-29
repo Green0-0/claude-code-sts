@@ -5,8 +5,10 @@ A complete, playable deck-building roguelike: 2 characters, 157 cards, 45 enemie
 campfires, elites, bosses and save/continue.
 
 It also ships a second, parallel game built from imported PokeAPI data: all
-**1025 Pokémon** are playable and encounterable, with real learnsets, the type
-chart, base stats and status ailments. See [Pokémon mode](#pokémon-mode).
+**1433 Pokémon** are playable and encounterable — the 1025 numbered species, 326
+alternate forms (Megas, Gigantamax, regional variants, Floette-Eternal) and the
+82 units of Smogon's CAP dex — with real learnsets, the type chart, base stats
+and status ailments. See [Pokémon mode](#pokémon-mode).
 
 Built and verified against **Godot 4.7** (any Godot 4.4+ should load it).
 
@@ -25,7 +27,7 @@ The main scene is `scenes/Main.tscn`.
 
 ```bash
 godot --headless -- --rules-test   # 69 assertions on the combat maths
-godot --headless -- --poke-test    # 297 assertions on the Pokémon layer
+godot --headless -- --poke-test    # 324 assertions on the Pokémon layer
 godot --headless -- --smoke        # one self-played run, prints a report
 godot --headless -- --smoke-deep   # 8 runs, immortal player, full 3-act coverage
 godot --headless -- --smoke-poke   # 8 self-played Pokémon runs
@@ -203,23 +205,42 @@ runs are untouched.
 
 ### Importing the data
 
-The two scripts under `tools/` are the whole pipeline. Neither runs at play time —
-the game only ever reads the three JSON files they produce.
+The scripts under `tools/` are the whole pipeline. None of them run at play time —
+the game only ever reads the four JSON files they produce.
 
 ```bash
-python3 tools/fetch_pokeapi.py     # mirrors PokeAPI into .pokecache/ (~200 MB, cached)
-python3 tools/build_data.py        # compacts it into data/*.json (1.4 MB, committed)
+python3 tools/fetch_pokeapi.py     # mirrors PokeAPI into .pokecache/ (~210 MB, cached)
+python3 tools/fetch_showdown.py    # mirrors Smogon's data tables, for the CAP dex
+python3 tools/build_data.py        # compacts both into data/*.json (2.0 MB, committed)
+python3 tools/fetch_sprites.py     # 1433 sprites into assets/sprites/pokemon/
 ```
 
 | File | Contents |
 |---|---|
-| `data/pokemon.json` | 1025 species: base stats, types, BST, weight, legendary flags, and a **79 120-row learnset** (`[move, level, method]`) |
-| `data/moves.json` | 798 moves: power, accuracy, PP, priority, damage class, ailment + chance, stat changes, drain/recoil, healing, multi-hit range, crit rate |
+| `data/pokemon.json` | 1433 units: base stats, types, BST, weight, legendary flags, which species and form each is, and a **109 578-row learnset** (`[move, level, method]`) |
+| `data/moves.json` | 839 moves: power, accuracy, PP, priority, damage class, ailment + chance, stat changes, drain/recoil, healing, multi-hit range, crit rate |
+| `data/evolution.json` | 522 evolving units and the six XP curves |
 | `data/types.json` | the full 18×18 effectiveness chart |
 
-`fetch_pokeapi.py` caches every response, so a re-run is free and deleting a cached
+Both fetchers cache every response, so a re-run is free and deleting a cached
 file is how you force a refetch. `build_data.py` keeps the data faithful — no
 balancing lives in it, so the game can be retuned without touching the network.
+
+**Alternate forms** are units in their own right, not decorations: a Mega has its
+own stats, typing and art, and carries `species`/`form`/`battle_only` so the game
+can tell what it is. PokeAPI keys evolution chains by species, which conflates a
+species with its regional variants — its Meowth chain claims Kanto's Meowth
+becomes Perrserker — so `build_data.py` splits those apart and gives each form
+its own branches.
+
+**The CAP dex** (Smogon's Create-A-Pokemon project) exists in no game, so it comes
+from the Showdown simulator instead and is translated in `tools/cap.py`. Three of
+its numbers — capture rate, growth curve, base experience — are single-player
+values Showdown does not carry, and are estimated from how the real dex
+distributes them. Its three invented moves (Paleo Wave, Shadow Strike, Polar
+Flare) are hand-written into the PokeAPI move shape. CAP evolution levels are
+seeded random rather than canonical: 10-20 for the first step of a three-stage
+line, 30-40 otherwise.
 
 ### From Pokémon numbers to Spire numbers
 
@@ -318,7 +339,7 @@ player who has not yet acted cannot be killed, so you always get your first turn
 
 ### Encounters depend on BST
 
-Nothing is hand-listed, and **nothing is ever excluded**. Every one of the 1025
+Nothing is hand-listed, and **nothing is ever excluded**. Every one of the 1433
 species is in every encounter table; what changes is how likely each is. The
 weight is a narrow bell curve over base stat total, centred on a band that climbs
 with how far through the run you are, *plus* a much wider and shallower curve
@@ -482,7 +503,11 @@ cheapest way to read as friendly rather than severe.
 
 ```
 tools/fetch_pokeapi.py   mirrors the API into .pokecache/
+tools/fetch_showdown.py  mirrors Smogon's data tables, for the CAP dex
+tools/showdown.py        reads Showdown's TypeScript tables as dicts
+tools/cap.py             translates the CAP dex into the PokeAPI shape
 tools/build_data.py      compacts the cache into data/*.json
+tools/fetch_sprites.py   downloads and trims the artwork
 scripts/core/
   PartyMember.gd         one Pokemon on the player's side, between fights
   PokeCapture.gd         catch rates and the ball formula
@@ -496,7 +521,7 @@ scripts/core/
   PokeEncounters.gd      BST-weighted encounter tables
 scripts/ui/PokemonSelect.gd    searchable dex picker
 scripts/ui/EvolutionScreen.gd  the evolution offer
-scripts/dev/PokeTest.gd       297 assertions over the whole layer
+scripts/dev/PokeTest.gd       324 assertions over the whole layer
 scripts/dev/Shot.gd           --poke-shots, one PNG per Pokémon-mode screen
 ```
 

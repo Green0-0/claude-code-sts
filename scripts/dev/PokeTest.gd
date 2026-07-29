@@ -5,6 +5,9 @@ extends Node
 ## and the combat rules those feed into.
 ##   godot --headless -- --poke-test
 
+## Where the CAP dex starts, matching CAP_ID_BASE in tools/cap.py.
+const CAP_ID_BASE := 20000
+
 var main: Node = null
 var passed: int = 0
 var failed: int = 0
@@ -44,6 +47,7 @@ func _near(label: String, got: float, want: float, tol: float) -> void:
 
 func _run() -> void:
 	_test_data()
+	_test_forms_and_cap()
 	_test_type_chart()
 	_test_stats()
 	_test_cards()
@@ -502,7 +506,22 @@ func _test_gated_rewards() -> void:
 func _test_data() -> void:
 	print("[poke] --- imported data")
 	_check_true("data available", PokeData.available())
-	_check("full national dex", PokeData.mon_count(), 1025)
+	# Every unit the import covers: the numbered species, every alternate form
+	# the API lists, and Smogon's CAP dex on top.
+	var species := 0
+	var forms := 0
+	var caps := 0
+	for m in PokeData.mons():
+		if int(m["id"]) >= CAP_ID_BASE:
+			caps += 1
+		elif String(m["form"]) != "":
+			forms += 1
+		else:
+			species += 1
+	_check("full national dex", species, 1025)
+	_check_true("alternate forms imported", forms > 300)
+	_check_true("CAP dex imported", caps > 75)
+	_check("every unit accounted for", PokeData.mon_count(), species + forms + caps)
 	_check_true("moves imported", PokeData.moves().size() > 700)
 	_check("18 types", PokeData.type_names().size(), 18)
 
@@ -521,6 +540,70 @@ func _test_data() -> void:
 	_check("thunderbolt is special", String(tbolt["class"]), "special")
 	_check("thunderbolt paralyses", String(tbolt["ailment"]), "paralysis")
 	_check("thunderbolt ailment chance", int(tbolt["ailment_chance"]), 10)
+
+
+# ══════════════════════════════ Forms and CAP ════════════════════════════════
+func _test_forms_and_cap() -> void:
+	print("[poke] --- alternate forms and the CAP dex")
+
+	# A form is its own unit, with its own stats and its own art, and knows
+	# which species it belongs to.
+	var mega := PokeData.mon("charizard-mega-x")
+	_check("a mega is its own unit", String(mega["species"]), "charizard")
+	_check("and knows which form it is", String(mega["form"]), "mega-x")
+	_check_true("mega charizard out-hits charizard",
+			int(mega["stats"]["atk"]) > int(PokeData.mon("charizard")["stats"]["atk"]))
+	_check_true("a mega only exists in battle", bool(mega["battle_only"]))
+	_check_true("a species is not a form", String(PokeData.mon("charizard")["form"]) == "")
+
+	# Regional variants keep their own typing and their own line.
+	var alolan := PokeData.mon("vulpix-alola")
+	_check("alolan vulpix is ice", alolan["types"], ["ice"])
+	_check("kanto vulpix is fire", PokeData.mon("vulpix")["types"], ["fire"])
+	_check("alolan vulpix evolves in region",
+			String((PokeData.evolutions_of("vulpix-alola")[0])["to"]), "ninetales-alola")
+	# Galarian Meowth becomes Perrserker; Kanto's never does.
+	_check("galarian meowth becomes perrserker",
+			String((PokeData.evolutions_of("meowth-galar")[0])["to"]), "perrserker")
+	_check("kanto meowth becomes persian",
+			String((PokeData.evolutions_of("meowth")[0])["to"]), "persian")
+	_check("kanto meowth has only that one branch",
+			PokeData.evolutions_of("meowth").size(), 1)
+
+	# The one-offs the import was asked for by name.
+	_check_true("floette-eternal imported", not PokeData.mon("floette-eternal").is_empty())
+	# A Gigantamax form has no movepool of its own in the API; it takes its
+	# species' rather than fielding a unit with no cards.
+	_check_true("gigantamax forms still have moves",
+			(PokeData.mon("charizard-gmax")["learnset"] as Array).size() > 50)
+
+	# CAP units are ordinary units by the time the game sees them.
+	var syclant := PokeData.mon("syclant")
+	_check("syclant typing", syclant["types"], ["ice", "bug"])
+	_check("syclant BST", int(syclant["bst"]), 555)
+	_check_true("syclant has a learnset", (syclant["learnset"] as Array).size() > 50)
+	_check_true("CAP art is installed",
+			PokeSprites.texture_for("syclant") != null)
+
+	# CAP-only moves came across in the same shape as everything else.
+	var paleo := PokeData.move("paleo-wave")
+	_check("paleo wave power", int(paleo["power"]), 85)
+	_check("paleo wave is rock", String(paleo["type"]), "rock")
+	_check("paleo wave lowers attack", String((paleo["stat_changes"][0])["stat"]), "atk")
+	var paleo_card := PokeMoves.get_def(PokeMoves.card_id("paleo-wave"))
+	_check_true("and it builds a card", not paleo_card.is_empty())
+
+	# Evolution levels for CAP were drawn per the import's rule: a three-stage
+	# line starts early, everything else lands late.
+	var three_stage := int((PokeData.evolutions_of("embirch")[0])["level"])
+	_check_true("a three-stage CAP line evolves early",
+			three_stage >= 10 and three_stage <= 20)
+	var two_stage := int((PokeData.evolutions_of("syclar")[0])["level"])
+	_check_true("a two-stage CAP line evolves late",
+			two_stage >= 30 and two_stage <= 40)
+	var second_step := int((PokeData.evolutions_of("flarelm")[0])["level"])
+	_check_true("and its second step lands late too",
+			second_step >= 30 and second_step <= 40)
 
 
 func _test_type_chart() -> void:

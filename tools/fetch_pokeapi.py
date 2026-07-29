@@ -21,8 +21,10 @@ import urllib.request
 from concurrent.futures import ThreadPoolExecutor
 
 API = "https://pokeapi.co/api/v2"
-# The National Dex through Gen 9. Ids above this are alternate forms (megas,
-# regional variants, totems), which would duplicate species we already have.
+# The National Dex through Gen 9. Ids above this are alternate forms — megas,
+# regional variants, Rotom appliances, totems, floette-eternal — which the API
+# numbers from 10001 up. We take those too: a mega is a different unit to fight
+# with than the species it comes from, so each gets its own entry.
 MAX_DEX = 1025
 UA = "claude-code-sts-pokemon-import/1.0 (github.com/local; contact: repo owner)"
 
@@ -107,6 +109,8 @@ def main() -> int:
     ap.add_argument("--workers", type=int, default=8)
     ap.add_argument("--limit", type=int, default=MAX_DEX,
                     help="highest dex number to fetch (for quick test runs)")
+    ap.add_argument("--no-forms", action="store_true",
+                    help="species only; skip megas, regionals and other forms")
     args = ap.parse_args()
 
     cache = os.path.abspath(args.cache)
@@ -118,26 +122,49 @@ def main() -> int:
     type_names = [t["name"] for t in types_index["results"]]
     fetch_many(cache, "type", type_names, args.workers)
 
-    # 2. Every species' default form: stats, types and its learnset.
-    dex = list(range(1, args.limit + 1))
-    mons = fetch_many(cache, "pokemon", dex, args.workers)
+    # 2. Every playable unit: the default form of each species, plus every
+    #    alternate form the API lists. The index is the authority on what
+    #    exists — hard-coding a range would miss forms added by later updates.
+    index = fetch(cache, "", "pokemon?limit=100000")
+    all_ids = sorted(int(r["url"].rstrip("/").rsplit("/", 1)[-1])
+                     for r in index["results"])
+    if args.limit < MAX_DEX:
+        all_ids = [i for i in all_ids if i <= args.limit]  # quick test runs
+    elif args.no_forms:
+        all_ids = [i for i in all_ids if i <= MAX_DEX]
+    log(f"{len(all_ids)} units "
+        f"({sum(1 for i in all_ids if i <= MAX_DEX)} species, "
+        f"{sum(1 for i in all_ids if i > MAX_DEX)} forms)")
+    mons = fetch_many(cache, "pokemon", all_ids, args.workers)
 
     # 3. Species records carry the legendary/mythical flags and flavour text
-    #    that the encounter tiering and card text use.
-    fetch_many(cache, "pokemon-species", dex, args.workers)
+    #    that the encounter tiering and card text use. Forms have no species
+    #    record of their own — they point back at the species they belong to.
+    species_ids = sorted({int((body["species"]["url"]).rstrip("/").rsplit("/", 1)[-1])
+                          for body in mons.values() if body.get("species")})
+    fetch_many(cache, "pokemon-species", species_ids, args.workers)
 
-    # 4. Only the moves that something can actually learn.
-    # Struggle appears in no learnset but is every Pokemon's last resort.
-    move_names = {"struggle"}
+    # 4. Only the moves that something can actually learn, plus three the API
+    #    lists in nobody's learnset: Struggle, every Pokemon's last resort, and
+    #    Celebrate and Hold Hands, which the CAP learnsets hand out.
+    move_names = {"struggle", "celebrate", "hold-hands"}
     for body in mons.values():
         for entry in body.get("moves", []):
             move_names.add(entry["move"]["name"])
     fetch_many(cache, "move", sorted(move_names), args.workers)
 
+    # 4b. Form records: which of those alternates are megas, and which exist
+    #     only mid-battle. build_data.py uses both when tiering encounters.
+    form_names = set()
+    for dex, body in mons.items():
+        if dex > MAX_DEX:
+            form_names.update(f["name"] for f in body.get("forms", []))
+    fetch_many(cache, "pokemon-form", sorted(form_names), args.workers)
+
     # 5. Evolution chains, for the levelling and evolution system. Several
     #    species share one chain, so collect the distinct ids first.
     chain_ids = set()
-    for dex in dex:
+    for dex in species_ids:
         body = fetch(cache, "pokemon-species", dex)
         if not body:
             continue

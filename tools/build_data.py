@@ -1,13 +1,18 @@
 #!/usr/bin/env python3
-"""Turn the PokeAPI cache into the three data files the game loads.
+"""Turn the PokeAPI cache into the four data files the game loads.
 
 The output stays a faithful, compact mirror of the API: base stats, the type
 chart, move mechanics, learnsets. None of the Slay-the-Spire balancing lives
 here — that mapping is PokeBalance.gd, so it can be retuned without a refetch.
 
+Every unit the API lists becomes a row, not just the 1025 numbered species:
+megas, regional variants, Rotom's appliances and one-offs like Floette-Eternal
+each fight differently enough to be worth their own entry. Smogon's CAP dex is
+folded in on top, from the Showdown mirror; see cap.py for that translation.
+
     python3 tools/build_data.py [--cache DIR] [--out DIR]
 
-Writes data/types.json, data/moves.json, data/pokemon.json.
+Writes data/types.json, data/moves.json, data/pokemon.json, data/evolution.json.
 """
 
 from __future__ import annotations
@@ -16,6 +21,11 @@ import argparse
 import json
 import os
 import sys
+
+import cap
+
+## The National Dex through Gen 9. Above this are the API's alternate forms.
+MAX_DEX = 1025
 
 STAT_KEYS = {
     "hp": "hp",
@@ -29,6 +39,12 @@ STAT_KEYS = {
 # Learn methods, packed as ints in the learnset triples.
 METHOD_CODES = {"level-up": 0, "machine": 1, "egg": 2, "tutor": 3}
 METHOD_OTHER = 4
+
+
+def method_code(name: str) -> int:
+    """The int a learn method packs down to. cap.py is handed this so that
+    these codes stay defined in one place."""
+    return METHOD_CODES.get(name, METHOD_OTHER)
 
 
 def load(cache: str, kind: str, key):
@@ -147,13 +163,39 @@ def learnset_for(body: dict, move_index: dict) -> list:
     return rows
 
 
-def build_pokemon(cache: str, limit: int, move_index: dict) -> list:
+def cached_ids(cache: str, limit: int, forms: bool = True) -> list:
+    """Every unit id mirrored into the cache, species and alternate forms both.
+
+    The cache is the authority rather than a range, so a form the API adds
+    later needs only a refetch to appear here. A limit below the full dex means
+    a quick test run, which drops the forms with it.
+    """
+    folder = os.path.join(cache, "pokemon")
+    if not os.path.isdir(folder):
+        return []
+    ids = sorted(int(f[:-5]) for f in os.listdir(folder) if f.endswith(".json"))
+    if limit < MAX_DEX:
+        return [i for i in ids if i <= limit]
+    return [i for i in ids if i <= limit or (i > MAX_DEX and forms)]
+
+
+def species_id_of(body: dict) -> int:
+    url = (body.get("species") or {}).get("url", "")
+    return int(url.rstrip("/").rsplit("/", 1)[-1]) if url else 0
+
+
+def build_pokemon(cache: str, ids: list, move_index: dict) -> list:
     out = []
-    for dex in range(1, limit + 1):
+    for dex in ids:
         body = load(cache, "pokemon", dex)
         if body is None:
             continue
-        species = load(cache, "pokemon-species", dex) or {}
+        # A form has no species record of its own: the flags, the XP curve and
+        # the dex category all belong to the species it is a form of.
+        species = load(cache, "pokemon-species", species_id_of(body)) or {}
+        form = {}
+        if dex > MAX_DEX and body.get("forms"):
+            form = load(cache, "pokemon-form", body["forms"][0]["name"]) or {}
         stats = {}
         for s in body.get("stats", []):
             key = STAT_KEYS.get(s["stat"]["name"])
@@ -166,6 +208,14 @@ def build_pokemon(cache: str, limit: int, move_index: dict) -> list:
         out.append({
             "id": dex,
             "name": body["name"],
+            # Which species this is, and which of its forms. Both are "" and ""
+            # for a default form; "rattata"/"alola" for Alolan Rattata. The
+            # evolution builder needs them, and the game can group by them.
+            "species": species.get("name", body["name"]),
+            "form": form.get("form_name", ""),
+            # Megas, Primals, Zen Mode and the rest never exist outside a
+            # battle, so an encounter that wants a wild Pokemon can skip them.
+            "battle_only": bool(form.get("is_battle_only")),
             "types": types,
             "stats": stats,
             "bst": sum(stats.values()),
@@ -183,6 +233,27 @@ def build_pokemon(cache: str, limit: int, move_index: dict) -> list:
             "learnset": learnset_for(body, move_index),
         })
     return out
+
+
+def inherit_missing_learnsets(mons: list) -> int:
+    """Give a form its species' moves when the API records none for it.
+
+    Every Gigantamax form and the newest wave of Megas ship with an empty move
+    list: the API treats them as a costume the species wears rather than
+    something with a movepool of its own. Taken literally that would be a unit
+    with no cards, so each falls back to what its species knows — which is also
+    the truth of it, since a Gigantamax Charizard is a Charizard.
+    """
+    default = {m["species"]: m for m in mons if m["id"] <= MAX_DEX}
+    filled = 0
+    for mon in mons:
+        if mon["learnset"] or not mon["form"]:
+            continue
+        source = default.get(mon["species"])
+        if source and source["learnset"]:
+            mon["learnset"] = [row[:] for row in source["learnset"]]
+            filled += 1
+    return filled
 
 
 ## Evolution triggers we can express in a dungeon. Anything else (trade,
@@ -230,10 +301,52 @@ def walk_chain(node: dict, out: dict) -> None:
         out[name] = branches
 
 
-def build_evolutions(cache: str, limit: int) -> dict:
+## ── Regional forms ───────────────────────────────────────────────────────────
+## PokeAPI's evolution chains are keyed by species, and a species covers all of
+## its regional forms at once. So Meowth's chain claims Meowth becomes both
+## Persian and Perrserker, when in truth Kanto's becomes one and Galar's the
+## other. The two tables below split that apart.
+
+## A form usually evolves into the same form of whatever its species evolves
+## into — Alolan Rattata into Alolan Raticate, a small Pumpkaboo into a small
+## Gourgeist — which needs no table, only a check that such a unit exists.
+## These are the ones whose evolution is a species in its own right instead.
+FORM_EVOLUTIONS = {
+    "meowth-galar": "perrserker",
+    "farfetchd-galar": "sirfetchd",
+    "corsola-galar": "cursola",
+    "linoone-galar": "obstagoon",
+    "mr-mime-galar": "mr-rime",
+    "yamask-galar": "runerigus",
+    "qwilfish-hisui": "overqwil",
+    "sneasel-hisui": "sneasler",
+    "wooper-paldea": "clodsire",
+    "basculin-white-striped": "basculegion",
+    "darumaka-galar": "darmanitan-galar-standard",
+    "gimmighoul-roaming": "gholdengo",
+    "rockruff-own-tempo": "lycanroc-dusk",
+}
+
+## The other half of that fact: branches the API hangs off a species which only
+## one of its forms can actually take. They move to the form, above.
+FORM_ONLY_BRANCHES = {
+    "meowth": {"perrserker"},
+    "yamask": {"runerigus"},
+    "sneasel": {"sneasler"},
+    "wooper": {"clodsire"},
+    "corsola": {"cursola"},
+    "farfetchd": {"sirfetchd"},
+    "linoone": {"obstagoon"},
+    "mr-mime": {"mr-rime"},
+    "qwilfish": {"overqwil"},
+    "basculin": {"basculegion"},
+}
+
+
+def build_evolutions(cache: str, species_ids: list) -> dict:
     """species name -> list of branches it can evolve into."""
     chains = set()
-    for dex in range(1, limit + 1):
+    for dex in species_ids:
         species = load(cache, "pokemon-species", dex)
         if not species:
             continue
@@ -245,6 +358,83 @@ def build_evolutions(cache: str, limit: int) -> dict:
         body = load(cache, "evolution-chain", chain_id)
         if body and body.get("chain"):
             walk_chain(body["chain"], out)
+    return out
+
+
+def drop_form_only_branches(chains: dict) -> None:
+    """Take the form-only branches off the species, in place.
+
+    Runs after add_form_evolutions, not before: the branch has to still be
+    there for Galarian Yamask to copy Runerigus' real trigger off it.
+    """
+    for name, disowned in FORM_ONLY_BRANCHES.items():
+        kept = [b for b in chains.get(name, []) if b["to"] not in disowned]
+        if kept:
+            chains[name] = kept
+        else:
+            chains.pop(name, None)
+
+
+def branch_towards(branches: list, target: str) -> dict:
+    """The species-level branch that a form's own evolution stands in for.
+
+    Matches the target itself, or the species it is a form of — Galarian
+    Darumaka's Darmanitan-Galar-Standard comes from Darumaka's Darmanitan — so
+    the form keeps the real level and trigger instead of a made-up one.
+    """
+    for b in branches:
+        if b["to"] == target or target.startswith(b["to"] + "-"):
+            return b
+    return branches[0] if branches else {"level": FALLBACK_EVO_LEVEL,
+                                         "trigger": LEVEL_TRIGGER}
+
+
+def add_form_evolutions(chains: dict, mons: list) -> None:
+    """Give each form its own branches, in place. Chains stay species-keyed."""
+    known = {m["name"] for m in mons}
+    # FORM_EVOLUTIONS names species, and a species is not always a unit name:
+    # Basculegion's default form is basculegion-male.
+    default = {m["species"]: m["name"] for m in mons if m["id"] <= MAX_DEX}
+    for mon in mons:
+        name, form = mon["name"], mon["form"]
+        if not form or name in chains:
+            continue
+        species_branches = chains.get(mon["species"], [])
+        if name in FORM_EVOLUTIONS:
+            target = FORM_EVOLUTIONS[name]
+            target = default.get(target, target)
+            if target not in known:
+                continue
+            source = branch_towards(species_branches, target)
+            chains[name] = [{"to": target, "level": source["level"],
+                             "trigger": source["trigger"]}]
+            continue
+        branches = [{"to": f"{b['to']}-{form}", "level": b["level"],
+                     "trigger": b["trigger"]}
+                    for b in species_branches
+                    if f"{b['to']}-{form}" in known]
+        if branches:
+            chains[name] = branches
+
+
+def name_evolutions_by_unit(chains: dict, mons: list) -> dict:
+    """Rewrite species names in the chains to the unit names they stand for.
+
+    Evolution chains talk in species — "darmanitan" — but a handful of species
+    have a suffix on even their default form, and the game looks units up by
+    name. So "darumaka evolves into darmanitan" has to become "... into
+    darmanitan-standard", and Frillish's own chain has to be filed under
+    frillish-male, or neither side of it resolves to anything.
+    """
+    unit_names = {m["name"] for m in mons}
+    default = {m["species"]: m["name"] for m in mons if m["id"] <= MAX_DEX}
+    out = {}
+    # Species-keyed entries first, so that where both exist — Frillish's chain
+    # and Frillish-Male's — the entry already written against the unit wins.
+    for source in sorted(chains, key=lambda s: s in unit_names):
+        key = source if source in unit_names else default.get(source, source)
+        out[key] = [dict(b, to=default.get(b["to"], b["to"]))
+                    for b in chains[source]]
     return out
 
 
@@ -279,7 +469,11 @@ def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--cache", default=".pokecache")
     ap.add_argument("--out", default="data")
-    ap.add_argument("--limit", type=int, default=1025)
+    ap.add_argument("--limit", type=int, default=MAX_DEX)
+    ap.add_argument("--no-forms", action="store_true",
+                    help="species only; leave out megas, regionals and the rest")
+    ap.add_argument("--no-cap", action="store_true",
+                    help="leave out Smogon's CAP dex")
     args = ap.parse_args()
 
     cache = os.path.abspath(args.cache)
@@ -287,10 +481,13 @@ def main() -> int:
         print(f"no cache at {cache} — run tools/fetch_pokeapi.py first", file=sys.stderr)
         return 1
 
-    # Only keep moves that something can actually learn, plus Struggle, which
-    # appears in no learnset but is every Pokemon's last resort.
-    wanted = {"struggle"}
-    for dex in range(1, args.limit + 1):
+    ids = cached_ids(cache, args.limit, not args.no_forms)
+
+    # Only keep moves that something can actually learn, plus the three the API
+    # lists in no learnset: Struggle, and the Celebrate and Hold Hands that CAP
+    # units are given.
+    wanted = {"struggle", "celebrate", "hold-hands"}
+    for dex in ids:
         body = load(cache, "pokemon", dex)
         if body is None:
             continue
@@ -300,14 +497,38 @@ def main() -> int:
     print("building")
     types = build_types(cache)
     moves = build_moves(cache, wanted)
-    move_index = {m["name"]: i for i, m in enumerate(moves)}
-    mons = build_pokemon(cache, args.limit, move_index)
 
+    cap_data = {} if args.no_cap else cap.load(cache)
+    if not args.no_cap and not cap_data.get("species"):
+        print("  no Showdown mirror — run tools/fetch_showdown.py for the CAP dex",
+              file=sys.stderr)
+        cap_data = {}
+    cap_moves = cap.build_moves(cap_data) if cap_data else []
+    # Sorted by name as one list, so a move's row does not depend on where it
+    # came from — the learnsets index into this by position.
+    moves = sorted(moves + cap_moves, key=lambda m: m["name"])
+    move_index = {m["name"]: i for i, m in enumerate(moves)}
+
+    mons = build_pokemon(cache, ids, move_index)
     if not mons or not moves:
         print("cache is incomplete — nothing written", file=sys.stderr)
         return 1
 
-    evolutions = build_evolutions(cache, args.limit)
+    inherited = inherit_missing_learnsets(mons)
+
+    species_ids = sorted({species_id_of(load(cache, "pokemon", d)) for d in ids})
+    evolutions = build_evolutions(cache, species_ids)
+    add_form_evolutions(evolutions, mons)
+    drop_form_only_branches(evolutions)
+    evolutions = name_evolutions_by_unit(evolutions, mons)
+
+    if cap_data:
+        # Showdown names moves without punctuation, so "aerialace" has to be
+        # matched back to the "aerial-ace" row the learnsets index into.
+        by_slug = {cap.slug(m["name"]): i for i, m in enumerate(moves)}
+        mons += cap.build_species(cap_data, by_slug, method_code)
+        evolutions.update(cap.build_evolutions(cap_data))
+
     growth = build_growth(cache)
 
     write_json(os.path.join(args.out, "types.json"), types)
@@ -318,9 +539,14 @@ def main() -> int:
 
     learn_rows = sum(len(m["learnset"]) for m in mons)
     branches = sum(len(v) for v in evolutions.values())
-    print(f"  {len(mons)} pokemon, {len(moves)} moves, {learn_rows} learnset rows")
-    print(f"  {len(evolutions)} evolving species, {branches} branches, "
+    forms = sum(1 for m in mons if m["form"] and m["id"] < cap.CAP_ID_BASE)
+    caps = sum(1 for m in mons if m["id"] >= cap.CAP_ID_BASE)
+    print(f"  {len(mons)} pokemon "
+          f"({len(mons) - forms - caps} species, {forms} forms, {caps} CAP), "
+          f"{len(moves)} moves, {learn_rows} learnset rows")
+    print(f"  {len(evolutions)} evolving units, {branches} branches, "
           f"{len(growth)} growth curves")
+    print(f"  {inherited} forms took their species' learnset")
     return 0
 
 

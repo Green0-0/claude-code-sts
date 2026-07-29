@@ -1,6 +1,7 @@
 extends Control
 
-## Character select for the 1025 playable Pokemon.
+## Character select for the 1433 playable units: every numbered species, every
+## alternate form the API lists, and Smogon's CAP dex.
 ##
 ## The whole dex is far too long to list at once, so the panel shows the best
 ## matches for whatever is typed and says how many it is hiding. Each row is the

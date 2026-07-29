@@ -90,7 +90,7 @@ static func get_def(id: String, level: int = -1) -> Dictionary:
 
 
 ## The level to report for a character. The one being played uses the run's
-## live level; anything else (the picker listing 1025 species) uses the level a
+## live level; anything else (the picker listing every unit) uses the level a
 ## run would start at, so the list is comparing like with like.
 static func _current_level_for(id: String) -> int:
 	if Engine.get_main_loop() != null and Run != null and Run.character == id:
