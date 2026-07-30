@@ -264,9 +264,9 @@ static func _intent_for(card: Dictionary) -> String:
 ## single scripted move used to be, which is the throughput the rest of the
 ## balance was built against.
 const DECK_COPIES := 2
-const ENEMY_ENERGY := {"normal": 1, "elite": 2, "boss": 3}
-const ENEMY_CARDS_PER_TURN := {"normal": 1, "elite": 2, "boss": 3}
-const ENEMY_DRAW := 3
+const ENEMY_ENERGY := {"normal": 3, "elite": 3, "boss": 3}
+const ENEMY_CARDS_PER_TURN := {"normal": 99, "elite": 99, "boss": 99}
+const ENEMY_DRAW := 5
 
 
 ## The deck an enemy fights with, built from the moves its level says it knows.
@@ -302,7 +302,15 @@ static func decorate(a: Actor, id: String) -> void:
 	var role := String(d.get("role", "normal"))
 	a.energy_per_turn = int(ENEMY_ENERGY.get(role, 1))
 	a.cards_per_turn = int(ENEMY_CARDS_PER_TURN.get(role, 1))
-	a.base_draw = ENEMY_DRAW
+	#a.base_draw = ENEMY_DRAW
+	#var spe := int((mon.get("stats", {}) as Dictionary).get("spe", 60))
+	var bst := float(mon.get("bst", 400))
+	#return 6 if spe >= 90 else 5
+	a.base_draw = int(floor((1125.0 - bst) / 190.0))#+3
+	if role == "boss":
+		a.base_draw += 2
+	if role == "elite":
+		a.base_draw += 1
 	for card_id in build_deck(id):
 		a.draw_pile.append(Card.create(card_id))
 

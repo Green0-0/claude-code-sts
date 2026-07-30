@@ -676,9 +676,20 @@ func enemy_turn_next() -> Dictionary:
 		return _commit_enemy_move(e)
 	if _turn_played >= e.cards_per_turn:
 		return {}
+
 	var card := _enemy_best_card(e)
+
+	# If no card is playable AND we haven't acted at all this turn, one Struggle.
+	if card == null and _turn_played == 0:
+		var struggle_id := PokeMoves.card_id("struggle")
+		for c in e.hand:
+			if c.id == struggle_id:
+				card = c
+				break
+
 	if card == null:
 		return {}
+
 	_turn_played += 1
 	return _commit_enemy_card(e, card)
 
@@ -731,20 +742,43 @@ func finish_enemy_turn(e: Actor) -> bool:
 func _enemy_best_card(e: Actor) -> Card:
 	var best: Card = null
 	var best_score := 0.0
+
 	for c in e.hand:
 		var card: Card = c
+		# Struggle is not a candidate for "best" — it is a last resort.
+		if card.id == PokeMoves.card_id("struggle"):
+			continue
 		if card.is_unplayable():
 			continue
 		var cost := card.base_cost()
 		if cost < 0 or cost > e.energy:
 			continue
+
+		# A damage-dealing pokemon card that cannot dent anyone is unplayable.
+		if card.is_pokemon_card() and not _card_can_hit_any_player(card):
+			continue
+
 		var score := _enemy_card_score(e, card)
 		if best == null or score > best_score:
 			best = card
 			best_score = score
+
 	return best
 
-
+func _card_can_hit_any_player(card: Card) -> bool:
+	var live := living_party()
+	for eff in card.effects():
+		var op := String(eff.get("op", ""))
+		# Non-damage effects always land.
+		if op != "poke_damage":
+			return true
+		var mtype := String(eff.get("mtype", "normal"))
+		for member in live:
+			if member.poke_types.is_empty():
+				return true
+			if PokeData.effectiveness(mtype, member.poke_types) > 0.0:
+				return true
+	return false
 ## Reuses the mob AI's judgement, expressed over a card rather than a move.
 ##
 ## The anti-repeat and jitter matter as much as the raw score. Without them an

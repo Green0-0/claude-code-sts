@@ -72,16 +72,21 @@ static func player_hp(mon: Dictionary, level: int, party_size: int = 1) -> int:
 ## Energy per turn. Fast Pokemon get to do more each turn, which is the main
 ## way Speed pays off for the player.
 static func energy_for(mon: Dictionary) -> int:
-	var spe := int((mon.get("stats", {}) as Dictionary).get("spe", 60))
-	if spe >= 110:
-		return 4
+	var bst := float(mon.get("bst", 400))
+	
+	if bst >= 1125:
+		return 3
 	return 3
+	
+	#return 3 + int(floor((1125.0 - bst) / 190.0))
 
 
 ## Cards drawn per turn, again from Speed. Kept to 5-6 so hands stay readable.
 static func draw_for(mon: Dictionary) -> int:
-	var spe := int((mon.get("stats", {}) as Dictionary).get("spe", 60))
-	return 6 if spe >= 90 else 5
+	#var spe := int((mon.get("stats", {}) as Dictionary).get("spe", 60))
+	var bst := float(mon.get("bst", 400))
+	#return 6 if spe >= 90 else 5
+	return int(floor((1125.0 - bst) / 190.0))#+3
 
 
 ## The offensive stat a move uses: Attack for physical, Sp. Atk for special.
@@ -220,22 +225,27 @@ static func card_type(mv: Dictionary) -> String:
 # ══════════════════════════ Encounters, weighted by BST ══════════════════════
 ## The BST the dungeon is willing to field, as a function of how far in you are.
 ##
-## The run opens genuinely low — around 250, the Rattata and Caterpie end of the
-## dex — so a player who picked a weak starter is not immediately outclassed, and
-## climbs from there. By the end it is fielding wild legendaries. Progress is
-## 0 at the first floor and 1 at the last, so the slope stretches automatically
-## if the run length changes.
-const BST_CAP_START := 0.0
-const BST_CAP_END := 1340.0
+## The run opens extremely low—around 175 BST, the Wishiwashi and Caterpie end 
+## of the dex. Progress is 0 at the first floor and 1 at the last.
+const BST_CENTER_START := 175.0
+const BST_TOTAL_SHIFT := 650.0
+
+## Adjusts the pacing of the BST climb. 
+## 1.0 = Linear (steady 25 BST/room). 
+## 2.0 = Slower early game, accelerating late game (first half covers only 162 BST, 
+## second half covers 488 BST).
+## 0.5 = Faster early game, slowing down late game.
+const PROGRESSION_CURVE_EXPONENT := 2.0
+
+## BST_SPREAD is highly reduced (3.0). This creates a very narrow 1-sigma band 
+## (68.27% of encounters) of only +/- 3 BST, ensuring Wishiwashi (175) and Sunkern 
+## (175) make up almost exactly 68% of Room 1 encounters. 95% of encounters will 
+## fall within +/- 6 BST, keeping early floors strictly tailored to the weakest mons.
+const BST_SPREAD := 3.0
 
 ## How far above the running cap each encounter kind aims. Elites and bosses are
 ## the reason you meet something above your weight class.
-const KIND_BST_OFFSET := {"weak": -400, "strong": -200, "elite": 300, "boss": 600}
-
-## Width of the bell curve around the target. Wider early, so the opening floors
-## stay varied rather than serving the same three species.
-const BST_SPREAD := 20.0
-
+const KIND_BST_OFFSET := {"weak": 0, "strong": 75, "elite": 150, "boss": 250}
 
 ## The strongest and weakest things that exist. Aiming a band outside this range
 ## would centre the bell curve on nothing, and every candidate would fall below
@@ -247,11 +257,11 @@ const BST_CEILING := 1340.0
 ## Target BST for a slot, given how far through the run it is (0-1).
 static func bst_target(progress: float, kind: String) -> float:
 	var t := clampf(progress, 0.0, 1.0)
-	# Eased rather than linear: the early climb is gentle, the late one steep,
-	# which is what makes the last act feel like it escalates.
-	var curve := t * t * 0.6 + t * 0.4
-	var cap := BST_CAP_START + (BST_CAP_END - BST_CAP_START) * curve
-	return clampf(cap + float(KIND_BST_OFFSET.get(kind, 0)), BST_FLOOR, BST_CEILING)
+	# Applies the curve exponent to scale the pacing of progression.
+	var t_eased := pow(t, PROGRESSION_CURVE_EXPONENT)
+	var cap := BST_CENTER_START + BST_TOTAL_SHIFT * t_eased
+	var target = clampf(cap + float(KIND_BST_OFFSET.get(kind, 0)), BST_FLOOR, BST_CEILING)
+	return target
 
 
 ## [centre, spread] for a slot. Kept in the shape the encounter tables expect.
@@ -261,14 +271,12 @@ static func band_for_progress(progress: float, kind: String) -> Array:
 
 ## How much of the weight lives in the long tail rather than the band.
 ##
-## A bare Gaussian falls off so fast that anything three bands away is
-## arithmetically impossible, which would mean the dungeon simply cannot show you
-## a Dragonite in Act 1. The curve is therefore a narrow bell for the band plus a
-## much wider, much shallower one underneath it: every species stays reachable at
-## every point in the run, but far-off ones are rare spice rather than routine.
-## Roughly 4-6% of early encounters come out of the tail.
-const TAIL_WEIGHT := 0.02
-const TAIL_SPREAD := 4.0
+## To allow catastrophic high-rolls (Eternamax Eternatus in Room 1) at raw shiny 
+## odds (~1 in 4,000) without breaking the narrow 68% standard deviation, the tail 
+## uses a very shallow, wide Gaussian. TAIL_WEIGHT (0.025%) and TAIL_SPREAD (600) 
+## ensure that extreme outliers are mathematically reachable but statistically negligible.
+const TAIL_WEIGHT := 0.00025
+const TAIL_SPREAD := 600.0
 
 ## Legendaries and mythicals are spice wherever they appear, not a wall. They get
 ## rarer the further from their band you are, like everything else, and this is
@@ -280,14 +288,13 @@ const EXOTIC_RARITY := 0.12
 ##
 ## This is the number the whole design turns on: difficulty comes from *which*
 ## species the dungeon reaches for, not from bending their stats or spiking their
-## level. Early on the curve sits over the Caterpie end of the dex and a Dragonite
-## is a shock; late on it sits over the legendaries and a Rattata is a curiosity.
+## level. Early on the curve sits over the Wishiwashi end of the dex and a 
+## Dragonite is a shock; late on it sits over the legendaries and a Rattata is a 
+## curiosity.
 static func encounter_weight(mon: Dictionary, progress: float, kind: String) -> float:
-	var band := band_for_progress(progress, kind)
-	var centre := float(band[0])
-	var spread := float(band[1])
+	var centre := bst_target(progress, kind)
 	var bst := float(mon.get("bst", 400))
-	var z := (bst - centre) / spread
+	var z := (bst - centre) / BST_SPREAD
 
 	# Narrow bell for the band, wide shallow one for the tail.
 	var w: float = exp(-0.5 * z * z)

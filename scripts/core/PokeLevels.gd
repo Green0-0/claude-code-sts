@@ -17,7 +17,7 @@ const MAX_LEVEL := 100
 
 ## The level a run starts at. Low enough that the first evolutions (16-20) land
 ## inside the run rather than after it.
-const START_LEVEL := 5
+const START_LEVEL := 1
 
 ## Nothing in the games has perfect stats, and a flat 15 across the board is the
 ## conventional "average" stand-in for individual values.

@@ -110,7 +110,6 @@ static func pick(progress: float, kind: String, rng: RandomNumberGenerator,
 	var out: Array = []
 	out.append(id)
 	for i in range(count):
-		print(Run.act_progress())
 		if rng.randf() < Run.act_progress():
 			out.append(random_candidate)
 	# Mixed packs read better than three clones, so a second species joins the
